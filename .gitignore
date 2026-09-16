@@ -1,0 +1,14 @@
+# Security & Environment Variables
+.env
+userbot_session.session
+*.session
+*.session-journal
+chat_history.db
+
+# Python virtual environment & cache
+venv/
+__pycache__/
+*.pyc
+
+# Temporary scratch scripts
+scratch/
