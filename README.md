@@ -41,6 +41,24 @@ c:\aiagent\
 
 ## 🚀 Panduan Setup Langkah Demi Langkah
 
+### Alternatif Node.js
+
+Versi Node.js tersedia di `bot.js` dan menggunakan file `.env` serta database SQLite yang sama.
+
+```bash
+npm install
+npm start
+```
+
+Untuk validasi sintaks dan menjalankan simulator:
+
+```bash
+npm run check
+npm run simulate -- --chat-id -100123456789 --topic "Persiapan rilis produk" --turns 6 --delay 3
+```
+
+Node.js 20 atau yang lebih baru direkomendasikan. Fitur utama bot sudah dipindahkan: penyimpanan histori, `/summary`, `/schedule`, `/unschedule`, `/groups`, `/model`, chat interaktif, terjemahan reply, chunking ringkasan, dan cleanup database. `userbot_summarizer.py` masih memakai Telethon Python karena login MTProto/session Telegram memerlukan alur terpisah.
+
 ### 1. Buat Bot di Telegram (@BotFather)
 1. Buka Telegram dan cari akun **[@BotFather](https://t.me/BotFather)**.
 2. Ketik `/newbot`, lalu ikuti petunjuk untuk memberikan nama bot dan username (misal: `my_summarizer_bot`).

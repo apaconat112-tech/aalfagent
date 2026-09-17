@@ -14,6 +14,28 @@ TELEGRAM_API_ID = os.getenv("TELEGRAM_API_ID", "").strip()
 TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH", "").strip()
 TELEGRAM_STRING_SESSION = os.getenv("TELEGRAM_STRING_SESSION", "").strip()
 
+def get_all_string_sessions() -> list[str]:
+    """Mendapatkan daftar seluruh StringSession Telegram yang dikonfigurasi di .env (Mendukung Multi-Account)."""
+    sessions = []
+    main_sess = os.getenv("TELEGRAM_STRING_SESSION", "").strip()
+    if main_sess:
+        sessions.append(main_sess)
+    
+    raw_list = os.getenv("TELEGRAM_STRING_SESSIONS", "").strip()
+    if raw_list:
+        for s in raw_list.split(","):
+            s = s.strip()
+            if s and s not in sessions:
+                sessions.append(s)
+
+    for k, v in os.environ.items():
+        if k.startswith("TELEGRAM_STRING_SESSION_") and v.strip():
+            val = v.strip()
+            if val not in sessions:
+                sessions.append(val)
+
+    return sessions
+
 # Token tambahan untuk Simulator Multi-Bot (dipisahkan koma)
 SIMULATOR_BOT_TOKENS_RAW = os.getenv("SIMULATOR_BOT_TOKENS", "").strip()
 SIMULATOR_BOT_TOKENS = [t.strip() for t in SIMULATOR_BOT_TOKENS_RAW.split(",") if t.strip()]
@@ -50,7 +72,7 @@ elif ANTHROPIC_API_KEY and not GEMINI_API_KEY and not HERMES_API_KEY and AI_PROV
 # Konfigurasi ringkasan dan database
 DEFAULT_SUMMARY_HOURS = int(os.getenv("DEFAULT_SUMMARY_HOURS", "24"))
 DATABASE_PATH = os.getenv("DATABASE_PATH", "chat_history.db").strip()
-MAX_MESSAGES_PER_CHUNK = int(os.getenv("MAX_MESSAGES_PER_CHUNK", "300"))
+MAX_MESSAGES_PER_CHUNK = int(os.getenv("MAX_MESSAGES_PER_CHUNK", "150"))
 
 def validate_config() -> tuple[bool, str]:
     """Validasi apakah environment variable utama sudah diisi."""

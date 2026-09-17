@@ -143,3 +143,10 @@ async def cleanup_old_messages(days: int = 30) -> int:
         deleted = cursor.rowcount
         await db.commit()
         return deleted
+
+async def get_all_tracked_chats() -> List[int]:
+    """Mendapatkan semua chat_id unik yang pernah tersimpan di database."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        async with db.execute("SELECT DISTINCT chat_id FROM messages") as cursor:
+            rows = await cursor.fetchall()
+            return [row[0] for row in rows]

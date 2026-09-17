@@ -1,9 +1,19 @@
 import argparse
 import asyncio
 import logging
+import re
+import socket
 import sys
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any, Optional
+
+# Force IPv4 resolution to fix Windows IPv6 unreachable route issues
+_original_getaddrinfo = socket.getaddrinfo
+def _ipv4_only_getaddrinfo(*args, **kwargs):
+    results = _original_getaddrinfo(*args, **kwargs)
+    ipv4_results = [r for r in results if r[0] == socket.AF_INET]
+    return ipv4_results if ipv4_results else results
+socket.getaddrinfo = _ipv4_only_getaddrinfo
 
 # UTF-8 output encoding for Windows console
 if hasattr(sys.stdout, "reconfigure"):
@@ -11,6 +21,7 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 
+import httpx
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from telethon.tl.types import Channel, Chat, User
@@ -65,6 +76,73 @@ async def get_telethon_client() -> TelegramClient:
         print("✅ Login Berhasil! Sesi disimpan di 'userbot_session.session'.\n")
 
     return client
+
+def parse_timeframe_and_group(raw_target: str) -> tuple[Optional[timedelta], str]:
+    """Parse timeframe (seperti '3h', '3jam', '2d', '2hari', '3') dan nama/ID grup secara akurat."""
+    if not raw_target or not raw_target.strip():
+        return None, ""
+
+    sub_words = raw_target.strip().split()
+    group_words = []
+    timeframe_delta = None
+
+    for idx, w in enumerate(sub_words):
+        w_lower = w.lower()
+
+        # 1. Format eksplisit dengan satuan (3h, 3jam, 2d, 2hari)
+        m_h = re.match(r"^(\d+)(h|jam)$", w_lower)
+        m_d = re.match(r"^(\d+)(d|hari)$", w_lower)
+
+        if m_h and not timeframe_delta:
+            timeframe_delta = timedelta(hours=int(m_h.group(1)))
+        elif m_d and not timeframe_delta:
+            timeframe_delta = timedelta(days=int(m_d.group(1)))
+        # 2. Dua kata terpisah ("3 jam", "3 h", "2 hari", "2 d")
+        elif w_lower in ["jam", "h"] and group_words and group_words[-1].isdigit() and not timeframe_delta:
+            val = int(group_words.pop())
+            timeframe_delta = timedelta(hours=val)
+        elif w_lower in ["hari", "d"] and group_words and group_words[-1].isdigit() and not timeframe_delta:
+            val = int(group_words.pop())
+            timeframe_delta = timedelta(days=val)
+        # 3. Angka murni di akhir argumen multi-kata (misal ".sum Nama Grup 3")
+        elif w_lower.isdigit() and group_words and idx == len(sub_words) - 1 and not timeframe_delta:
+            timeframe_delta = timedelta(hours=int(w_lower))
+        else:
+            group_words.append(w)
+
+    target_group = " ".join(group_words).strip()
+    return timeframe_delta, target_group
+
+async def find_telegram_group(client: TelegramClient, target_group: str) -> Any:
+    """Cari entitas Telegram berdasarkan ID numerik, nama persis, atau kata kunci nama grup."""
+    if not target_group:
+        return None
+
+    # Try 1: Telethon get_entity (jika ID numerik atau username/link)
+    try:
+        target_id = int(target_group)
+        try:
+            return await client.get_entity(target_id)
+        except Exception:
+            pass
+    except ValueError:
+        pass
+
+    # Try 2: Iterasi dialogs (mencari berdasarkan ID numerik atau Nama Grup)
+    async for dialog in client.iter_dialogs():
+        if dialog.is_group or dialog.is_channel:
+            d_id = str(getattr(dialog.entity, "id", ""))
+            d_dialog_id = str(getattr(dialog, "id", ""))
+
+            # Cocokkan ID (baik positive maupun negative)
+            if target_group in (d_id, d_dialog_id, f"-100{d_id}"):
+                return dialog.entity
+
+            # Cocokkan Nama/Title Grup
+            if target_group.lower() in dialog.name.lower():
+                return dialog.entity
+
+    return None
 
 async def list_user_groups() -> None:
     """Menampilkan daftar semua grup Telegram yang Anda ikuti."""
@@ -122,17 +200,7 @@ async def summarize_group_silently(
     client = await get_telethon_client()
     try:
         # Cari entitas grup berdasarkan ID atau Nama
-        target_entity = None
-        try:
-            target_id = int(target_group)
-            target_entity = await client.get_entity(target_id)
-        except (ValueError, Exception):
-            # Cari berdasarkan string/nama
-            async for dialog in client.iter_dialogs():
-                if dialog.is_group or dialog.is_channel:
-                    if target_group.lower() in dialog.name.lower():
-                        target_entity = dialog.entity
-                        break
+        target_entity = await find_telegram_group(client, target_group)
 
         if not target_entity:
             print(f"\n❌ Grup '{target_group}' tidak ditemukan!")
@@ -161,10 +229,7 @@ async def summarize_group_silently(
             if sender_id and sender_id in user_cache:
                 sender = user_cache[sender_id]
             else:
-                try:
-                    sender = await msg.get_sender()
-                except Exception:
-                    sender = getattr(msg, "sender", None)
+                sender = msg.sender or getattr(msg, "sender", None)
                 if sender_id:
                     user_cache[sender_id] = sender
 
@@ -238,90 +303,217 @@ async def summarize_group_silently(
         except Exception:
             pass
 
-async def run_saved_messages_listener() -> None:
-    """Mode Listener: Mendengarkan perintah langsung dari Pesan Tersimpan (Saved Messages) Telegram Anda."""
+async def check_all_quotas() -> str:
+    """Mengecek sisa kuota & status live untuk semua provider AI."""
+    lines = ["📊 *STATUS & SISA KUOTA AI:*"]
+    
+    # 1. OpenRouter (Hermes)
+    if config.HERMES_API_KEY:
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as http_client:
+                r = await http_client.get(
+                    "https://openrouter.ai/api/v1/auth/key",
+                    headers={"Authorization": f"Bearer {config.HERMES_API_KEY}"}
+                )
+                if r.status_code == 200:
+                    data = r.json().get("data", {})
+                    free_info = data.get("free_model_daily_requests")
+                    if free_info and isinstance(free_info, dict):
+                        limit = free_info.get("limit", 50)
+                        rem = free_info.get("remaining", 50)
+                        used = free_info.get("used", 0)
+                        pct = int((rem / limit) * 100) if limit > 0 else 100
+                        lines.append(f"• *OpenRouter*: Sisa *{pct}%* (`{rem}/{limit}` req | Terpakai: {used})")
+                    else:
+                        usage = data.get("usage", 0)
+                        lines.append(f"• *OpenRouter*: Aktif (Penggunaan: ${usage:.4f})")
+                else:
+                    lines.append("• *OpenRouter*: Key Valid")
+        except Exception:
+            lines.append("• *OpenRouter*: Key Valid")
+    else:
+        lines.append("• *OpenRouter*: Key Belum Diisi")
+
+    # 2. Google Gemini
+    if config.GEMINI_API_KEY:
+        lines.append(f"• *Google Gemini*: Aktif (`{config.GEMINI_MODEL}`)")
+    else:
+        lines.append("• *Google Gemini*: Key Belum Diisi")
+
+    # 3. Anthropic Claude
+    if config.ANTHROPIC_API_KEY:
+        lines.append(f"• *Anthropic Claude*: Aktif (`{config.ANTHROPIC_MODEL}`)")
+    else:
+        lines.append("• *Anthropic Claude*: Key Belum Diisi")
+
+    return "\n".join(lines)
+
+async def start_single_userbot(session_str: str, account_index: int = 1, total_accounts: int = 1) -> None:
+    """Jalankan 1 instance Telethon Userbot secara independen untuk StringSession tertentu."""
     api_id = int(config.TELEGRAM_API_ID)
     api_hash = config.TELEGRAM_API_HASH
     
-    session_obj = StringSession(config.TELEGRAM_STRING_SESSION) if config.TELEGRAM_STRING_SESSION else SESSION_NAME
+    session_obj = StringSession(session_str) if session_str else SESSION_NAME
     client = TelegramClient(session_obj, api_id, api_hash, receive_updates=True)
-    await client.start()
-
-    print("\n=========================================================")
-    print("🤫 TELEGRAM USERBOT LISTEN MODE (TERHUBUNG)")
-    print("=========================================================")
-    print("📌 Anda sekarang bisa langsung mengontrol UserBot dari HP Anda!")
-    print("📌 Buka 'Pesan Tersimpan' (Saved Messages) di Telegram & ketik:")
-    print("   • /rangkum Nama Grup   -> Membaca & meringkas 1000 pesan grup")
-    print("   • /grup                -> Menampilkan daftar grup Anda")
-    print("=========================================================\n")
+    await client.start()  # type: ignore
 
     try:
-        await client.send_message("me", 
-            "🤖 *UserBot Private Summarizer Aktif!*\n\n"
-            "Ketik perintah di bawah ini di Pesan Tersimpan Anda:\n"
-            "• `/rangkum Nama Grup` — Meringkas 1000 pesan grup secara rahasia\n"
-            "• `/grup` — Lihat daftar nama grup Anda",
-            parse_mode="Markdown"
-        )
+        me = await client.get_me()
+        user_name = me.first_name or "Sobat"
+        user_display = f"{me.first_name or ''} {me.last_name or ''}".strip() or me.username or f"User_{me.id}"
     except Exception:
-        pass
+        user_name = "Sobat"
+    logger.info("Userbot [%d/%d] Terhubung: %s", account_index, total_accounts, user_display)
 
-    @client.on(events.NewMessage(chats="me"))
+    @client.on(events.NewMessage)
     async def handler(event):
+        if not event.out and getattr(event, "sender_id", None) != me.id:
+            return
+
+        # Abaikan pesan jika diketik di dalam chat room Bot Nier (karena bot.py yang membalas!)
+        if config.TELEGRAM_BOT_TOKEN and ":" in config.TELEGRAM_BOT_TOKEN:
+            try:
+                bot_user_id = int(config.TELEGRAM_BOT_TOKEN.split(":")[0])
+                if event.chat_id == bot_user_id:
+                    return
+            except Exception:
+                pass
+
         text = event.text.strip() if event.text else ""
         if not text:
             return
 
-        if text.startswith("/grup") or text.startswith("/groups"):
-            msg_lines = ["📋 *Daftar Grup Telegram Anda:*"]
-            async for dialog in client.iter_dialogs():
-                if dialog.is_group or dialog.is_channel:
-                    msg_lines.append(f"• `{dialog.name}`")
-            await send_long_message(client, "me", "\n".join(msg_lines))
-            return
+        dest = event.chat_id if event.chat_id else "me"
 
-        if text.startswith("/rangkum") or text.startswith("/summarize"):
+        # ---------------------------------------------------------
+        # Perintah .model / /model: Cek Kuota % & Ganti Model AI
+        # ---------------------------------------------------------
+        if text.startswith(".model") or text.startswith("/model"):
             parts = text.split(maxsplit=1)
-            if len(parts) < 2:
-                await client.send_message("me", "⚠️ Format salah! Gunakan: `/rangkum Nama Grup`", parse_mode="Markdown")
+            if len(parts) == 1:
+                cur_prov = config.AI_PROVIDER.upper()
+                cur_mod = config.HERMES_MODEL if config.AI_PROVIDER == "hermes" else (config.GEMINI_MODEL if config.AI_PROVIDER == "gemini" else config.ANTHROPIC_MODEL)
+                
+                quota_status = await check_all_quotas()
+
+                msg = (
+                    f"Halo {user_name}! Berikut status model AI yang sedang kita gunakan:\n\n"
+                    f"🤖 *STATUS MODEL AI:*\n"
+                    f"• Provider Utama: *{cur_prov}*\n"
+                    f"• Model Aktif: `{cur_mod}`\n\n"
+                    f"{quota_status}\n\n"
+                    f"💡 *GANTI MODEL:* \n"
+                    f"• `.model gemini` — Ganti ke Google Gemini\n"
+                    f"• `.model hermes` — Ganti ke OpenRouter Hermes\n"
+                    f"• `.model claude` — Ganti ke Anthropic Claude\n"
+                    f"• `.model <nama_model_openrouter>` — Set model spesifik OpenRouter"
+                )
+                await client.send_message(dest, msg, parse_mode="Markdown")
                 return
 
-            target_group = parts[1].strip()
-            await client.send_message("me", f"⏳ *Membaca & meringkas obrolan grup '{target_group}'...*", parse_mode="Markdown")
+            param = parts[1].strip().lower()
+            if param == "gemini":
+                config.AI_PROVIDER = "gemini"
+                await client.send_message(dest, f"Siap {user_name}! AI Provider telah diubah ke *GOOGLE GEMINI* (`{config.GEMINI_MODEL}`).", parse_mode="Markdown")
+            elif param in ["hermes", "openrouter", "auto"]:
+                config.AI_PROVIDER = "hermes"
+                config.HERMES_MODEL = "openrouter/auto"
+                await client.send_message(dest, f"Siap {user_name}! AI Provider telah diubah ke *HERMES / OPENROUTER* (`openrouter/auto`).", parse_mode="Markdown")
+            elif param == "claude":
+                if not config.ANTHROPIC_API_KEY:
+                    await client.send_message(dest, f"Waduh {user_name}, `ANTHROPIC_API_KEY` belum diisi di `.env` nih!", parse_mode="Markdown")
+                else:
+                    config.AI_PROVIDER = "anthropic"
+                    await client.send_message(dest, f"Siap {user_name}! AI Provider telah diubah ke *CLAUDE* (`{config.ANTHROPIC_MODEL}`).", parse_mode="Markdown")
+            else:
+                # Custom model name for OpenRouter
+                config.AI_PROVIDER = "hermes"
+                config.HERMES_MODEL = parts[1].strip()
+                await client.send_message(dest, f"Siap {user_name}! Model Hermes telah diset ke: `{config.HERMES_MODEL}`.", parse_mode="Markdown")
+            return
 
-            target_entity = None
-            try:
-                target_id = int(target_group)
-                target_entity = await client.get_entity(target_id)
-            except (ValueError, Exception):
-                async for dialog in client.iter_dialogs():
-                    if dialog.is_group or dialog.is_channel:
-                        if target_group.lower() in dialog.name.lower():
-                            target_entity = dialog.entity
-                            break
+        # ---------------------------------------------------------
+        # Perintah .grup / /grup
+        # ---------------------------------------------------------
+        if text.startswith(".grup") or text.startswith("/grup") or text.startswith(".groups") or text.startswith("/groups"):
+            msg_lines = [f"Berikut daftar grup Telegram yang kamu ikuti, {user_name}:\n"]
+            async for dialog in client.iter_dialogs():
+                if dialog.is_group or dialog.is_channel:
+                    d_id = getattr(dialog.entity, "id", None) or getattr(dialog, "id", None)
+                    id_str = f" `(ID: {d_id})`" if d_id else ""
+                    msg_lines.append(f"• `{dialog.name}`{id_str}")
+            await send_long_message(client, dest, "\n".join(msg_lines))
+            return
+
+        # ---------------------------------------------------------
+        # Perintah .sum / .rangkum / /rangkum / /summarize
+        # ---------------------------------------------------------
+        is_sum_cmd = False
+        for cmd in [".sum", "/sum", ".rangkum", "/rangkum", ".summarize", "/summarize"]:
+            if text.startswith(cmd):
+                is_sum_cmd = True
+                break
+
+        if not is_sum_cmd:
+            return
+
+        try:
+            # Ekstrak flag provider jika ada (--gemini / --hermes / --claude)
+            target_provider = None
+            if "--gemini" in text:
+                target_provider = "gemini"
+                text = text.replace("--gemini", "").strip()
+            elif "--hermes" in text:
+                target_provider = "hermes"
+                text = text.replace("--hermes", "").strip()
+            elif "--claude" in text:
+                target_provider = "claude"
+                text = text.replace("--claude", "").strip()
+
+            parts = text.split(maxsplit=1)
+            raw_target = parts[1].strip() if len(parts) > 1 else ""
+
+            # Parse filter waktu dan nama/ID grup
+            timeframe_delta, target_group = parse_timeframe_and_group(raw_target)
+
+            # Jika diketik di dalam grup tanpa argumen grup
+            chat = await event.get_chat()
+            if not target_group and isinstance(chat, (Channel, Chat)):
+                target_group = str(chat.id)
+
+            if not target_group:
+                await client.send_message(dest, f"Cara pakainya cukup ketik: `.sum NamaGrup` atau `.sum` langsung di dalam grup ya {user_name}!", parse_mode="Markdown")
+                return
+
+            target_entity = await find_telegram_group(client, target_group)
 
             if not target_entity:
-                await client.send_message("me", f"❌ Grup '{target_group}' tidak ditemukan!\nKetik `/grup` untuk melihat nama grup Anda.", parse_mode="Markdown")
+                await client.send_message(dest, f"Maaf {user_name}, grup '{target_group}' tidak ditemukan nih.\nCoba ketik `.grup` untuk cek nama grup yang pas ya!", parse_mode="Markdown")
                 return
 
             group_title = getattr(target_entity, "title", str(target_group))
-            group_id = target_entity.id
+            
+            # Notifikasi Ramah
+            use_prov = target_provider or config.AI_PROVIDER
+            await client.send_message(dest, f"Siap {user_name}! ⏳ Saya sedang membaca & menganalisis obrolan grup *{group_title}* dengan AI ({use_prov.upper()})...", parse_mode="Markdown")
+
+            now_utc = datetime.now(timezone.utc)
+            since_cutoff = (now_utc - timeframe_delta) if timeframe_delta else None
 
             formatted_messages = []
             user_cache = {}
             async for msg in client.iter_messages(target_entity, limit=1000):
                 if not msg.text or not msg.text.strip():
                     continue
-                msg_date = msg.date.astimezone(timezone.utc) if msg.date else datetime.now(timezone.utc)
+                msg_date = msg.date.astimezone(timezone.utc) if msg.date else now_utc
+                if since_cutoff and msg_date < since_cutoff:
+                    continue
+
                 sender_id = msg.sender_id
                 if sender_id and sender_id in user_cache:
                     sender = user_cache[sender_id]
                 else:
-                    try:
-                        sender = await msg.get_sender()
-                    except Exception:
-                        sender = getattr(msg, "sender", None)
+                    sender = msg.sender or getattr(msg, "sender", None)
                     if sender_id:
                         user_cache[sender_id] = sender
 
@@ -347,20 +539,42 @@ async def run_saved_messages_listener() -> None:
             formatted_messages.reverse()
 
             if not formatted_messages:
-                await client.send_message("me", f"ℹ️ Tidak ditemukan pesan baru di grup '{group_title}'.")
+                time_lbl = f"{int(timeframe_delta.total_seconds() // 3600)} jam terakhir" if timeframe_delta else "terbaru"
+                await client.send_message(dest, f"Belum ada obrolan baru nih di grup '{group_title}' untuk periode {time_lbl}, {user_name}.")
                 return
 
-            summarizer = ChatSummarizer()
+            tf_label = f"{int(timeframe_delta.total_seconds() // 3600)} jam terakhir" if timeframe_delta else f"{len(formatted_messages)} pesan terbaru"
+            summarizer = ChatSummarizer(provider=target_provider)
             try:
-                summary_result = await summarizer.summarize_messages(formatted_messages, timeframe_info=f"{len(formatted_messages)} pesan terbaru")
+                summary_result = await summarizer.summarize_messages(formatted_messages, timeframe_info=tf_label)
             except Exception as e:
                 summary_result = f"❌ Terjadi kesalahan saat memproses ringkasan: {str(e)}"
 
-            header = f"🤫 *RINGKASAN RAHASIA GRUP: {group_title}*\n"
-            full_msg = f"{header}\n{summary_result}"
-            await send_long_message(client, "me", full_msg)
+            full_msg = f"Halo {user_name}! 👋 Ini ringkasan obrolan grup *{group_title}* yang kamu minta:\n\n{summary_result}"
+            await send_long_message(client, dest, full_msg)
+        except Exception as cmd_err:
+            logger.exception("Error executing .sum command: %s", cmd_err)
+            await client.send_message(dest, f"❌ Terjadi kesalahan saat merangkum: {str(cmd_err)}")
 
     await client.run_until_disconnected()
+
+async def run_saved_messages_listener() -> None:
+    """Mode Listener Multi-Account: Mendengarkan perintah dari seluruh akun Telegram yang dikonfigurasi."""
+    sessions = config.get_all_string_sessions()
+    if not sessions:
+        sessions = [""]
+
+    total = len(sessions)
+    print("\n=========================================================")
+    print(f"🤫 TELEGRAM USERBOT MULTI-ACCOUNT MODE ({total} AKUN TERHUBUNG)")
+    print("=========================================================")
+    print("📌 Perintah siap digunakan via Telegram HP Anda:")
+    print("   • .sum / .rangkum Nama Grup   -> Meringkas obrolan grup")
+    print("   • .model                      -> Cek & ganti AI provider")
+    print("   • .grup                       -> Menampilkan daftar grup Anda")
+    print("=========================================================\n")
+
+    await asyncio.gather(*[start_single_userbot(sess, idx, total) for idx, sess in enumerate(sessions, 1)])
 
 def main():
     parser = argparse.ArgumentParser(description="Telegram Private UserBot Summarizer (Tanpa Perlu Undang Bot ke Grup)")

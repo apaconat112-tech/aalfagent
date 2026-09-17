@@ -37,13 +37,32 @@ async def main():
 
     # Buat StringSession baru secara interaktif jika belum ada
     async with TelegramClient(StringSession(), int(api_id_str), api_hash) as client:
-        print("\nTELEGRAM_STRING_SESSION Berhasil Dibuat!\n")
         session_str = client.session.save()
         print("=========================================================")
         print(session_str)
         print("=========================================================\n")
-        print("Salin kode di atas ke file .env Anda:")
-        print(f"TELEGRAM_STRING_SESSION={session_str}\n")
+        
+        # Simpan otomatis ke .env
+        env_path = "c:/aiagent/.env"
+        try:
+            with open(env_path, "r", encoding="utf-8") as f:
+                env_content = f.read()
+
+            # Cari nomor index berikutnya
+            idx = 2
+            while f"TELEGRAM_STRING_SESSION_{idx}=" in env_content:
+                idx += 1
+
+            if "TELEGRAM_STRING_SESSION=" not in env_content or not config.TELEGRAM_STRING_SESSION:
+                key_name = "TELEGRAM_STRING_SESSION"
+            else:
+                key_name = f"TELEGRAM_STRING_SESSION_{idx}"
+
+            with open(env_path, "a", encoding="utf-8") as f:
+                f.write(f"\n{key_name}={session_str}\n")
+            print(f"✅ Sesi baru berhasil disimpan otomatis ke file .env sebagai '{key_name}'!\n")
+        except Exception as save_err:
+            print(f"Salin kode di atas secara manual ke file .env Anda:\nTELEGRAM_STRING_SESSION={session_str}\n")
 
 if __name__ == "__main__":
     asyncio.run(main())

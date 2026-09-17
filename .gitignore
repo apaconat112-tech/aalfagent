@@ -9,6 +9,10 @@ chat_history.db
 venv/
 __pycache__/
 *.pyc
+node_modules/
+
+# Node.js debug output
+npm-debug.log*
 
 # Temporary scratch scripts
 scratch/
