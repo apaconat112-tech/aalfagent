@@ -316,21 +316,32 @@ class ChatSummarizer:
         models_to_try = [m for m in models_to_try if not (m in seen or seen.add(m))]
         last_exception = None
         for target_model in models_to_try:
-            try:
-                response = await self.gemini_client.aio.models.generate_content(
-                    model=target_model,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        system_instruction=system_instruction,
-                        max_output_tokens=2048,
-                        temperature=0.7,
+            for attempt in range(3):
+                try:
+                    response = await self.gemini_client.aio.models.generate_content(
+                        model=target_model,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            system_instruction=system_instruction,
+                            max_output_tokens=4096,
+                            temperature=0.7,
+                        )
                     )
-                )
-                if response and response.text:
-                    return response.text
-            except Exception as e:
-                last_exception = e
-                logger.warning("Gemini chat model %s failed: %s", target_model, e)
+                    if response and response.text:
+                        return response.text
+                except Exception as e:
+                    last_exception = e
+                    err_str = str(e).lower()
+                    if "503" in err_str or "unavailable" in err_str or "429" in err_str or "resource_exhausted" in err_str:
+                        wait_seconds = 3 * (attempt + 1)
+                        logger.warning(
+                            "Gemini chat model %s temporarily unavailable (attempt %d/3), retrying in %ds...",
+                            target_model, attempt + 1, wait_seconds
+                        )
+                        await asyncio.sleep(wait_seconds)
+                    else:
+                        logger.warning("Gemini chat model %s failed: %s", target_model, e)
+                        break
         if last_exception:
             raise last_exception
         return ""
@@ -409,12 +420,21 @@ class ChatSummarizer:
             return await self._call_hermes(prompt, system_instruction=system_instruction)
         except Exception as primary_err:
             logger.warning("Translation provider utama (%s) gagal: %s", self.provider, primary_err)
-            try:
-                if config.GEMINI_API_KEY and self.provider != "gemini":
+
+            # Gemini bisa sementara penuh; gunakan provider lain jika tersedia.
+            if self.provider != "hermes" and config.HERMES_API_KEY:
+                try:
+                    return await self._call_hermes(prompt, system_instruction=system_instruction)
+                except Exception as fallback_err:
+                    logger.warning("Fallback terjemahan ke Hermes gagal: %s", fallback_err)
+
+            if self.provider != "gemini" and config.GEMINI_API_KEY:
+                try:
                     return await self._call_gemini_chat(prompt, system_instruction)
-            except Exception as fallback_err:
-                logger.error("Fallback terjemahan juga gagal: %s", fallback_err)
-            return f"❌ *Maaf, terjemahan gagal:* {str(primary_err)}"
+                except Exception as fallback_err:
+                    logger.warning("Fallback terjemahan ke Gemini gagal: %s", fallback_err)
+
+            return "❌ *Maaf, layanan AI sedang sibuk.* Silakan coba terjemahkan lagi beberapa detik kemudian."
 
     async def summarize_messages(
         self,
