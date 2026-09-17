@@ -1,6 +1,6 @@
-# 🚀 Panduan Deploy UserBot 24/7 (Laptop Mati Tetap Nyala)
+# 🚀 Panduan Deploy Telegram Bot 24/7 di Railway
 
-Dokumen ini berisi panduan langkah demi langkah untuk menjalankan Telegram UserBot Anda secara **24 jam nonstop di Cloud (Server)** sehingga Anda bisa mengontrolnya dari HP kapan saja tanpa perlu laptop menyala.
+Dokumen ini berisi panduan untuk menjalankan bot Telegram secara **24 jam nonstop di Railway**, sehingga bot tetap merespons meskipun laptop dimatikan.
 
 ---
 
@@ -9,30 +9,38 @@ Di platform Cloud apa pun yang Anda pilih, masukkan variabel dari file `.env` An
 
 | Variable | Nilai / Value |
 |---|---|
+| `TELEGRAM_BOT_TOKEN` | `<TOKEN_BOTFATHER_ANDA>` |
 | `TELEGRAM_API_ID` | `<TELEGRAM_API_ID_ANDA>` |
 | `TELEGRAM_API_HASH` | `<TELEGRAM_API_HASH_ANDA>` |
 | `TELEGRAM_STRING_SESSION` | `<TELEGRAM_STRING_SESSION_ANDA>` |
-| `AI_PROVIDER` | `hermes` |
-| `HERMES_API_KEY` | `<OPENROUTER_API_KEY_ANDA>` |
+| `AI_PROVIDER` | `gemini` atau `hermes` |
+| `GEMINI_API_KEY` | `<GEMINI_API_KEY_ANDA>` jika memakai Gemini |
+| `GEMINI_MODEL` | `gemini-3.6-flash` |
+| `HERMES_API_KEY` | `<OPENROUTER_API_KEY_ANDA>` jika memakai Hermes |
 | `HERMES_MODEL` | `openrouter/auto` |
 | `HERMES_BASE_URL` | `https://openrouter.ai/api/v1` |
 
 ---
 
-## ⚡ PILIHAN 1: Deploy Gratis di Koyeb.com / Render.com (Paling Mudah)
+## ⚡ Deploy di Railway
 
 1. **Upload / Push** folder project ini ke akun GitHub Anda.
-2. Buka [Koyeb.com](https://www.koyeb.com/) atau [Render.com](https://render.com/) (Daftar Gratis).
-3. Buat Service baru -> Pilih **GitHub Repository** yang berisi kodingan Anda.
-4. Pilih **Dockerfile** (otomatis terdeteksi dari `Dockerfile` di project).
-5. Masukkan **Environment Variables** dari tabel di atas.
-6. Klik **Deploy**! 
+2. Buka [Railway](https://railway.com/), pilih **New Project** lalu **Deploy from GitHub Repo**.
+3. Pilih repository project ini. Railway akan mendeteksi `Dockerfile` secara otomatis.
+4. Buka service -> **Variables**, lalu masukkan variabel dari tabel di atas.
+5. Deploy/redeploy service. Log yang benar akan berisi `Application started`.
 
-🎉 **Selesai!** UserBot Anda akan aktif 24/7 di Cloud. Anda bisa matikan laptop kapan saja.
+🎉 **Selesai!** Bot Anda aktif 24/7 di cloud dan laptop boleh dimatikan.
+
+### Catatan penting Railway
+
+- Service ini adalah worker long-polling dan tidak membutuhkan port HTTP.
+- `chat_history.db` di filesystem Railway dapat hilang saat redeploy. Tambahkan Railway Volume jika histori database harus persisten.
+- Jangan menjalankan service kedua dengan token bot yang sama, karena Telegram hanya mengizinkan satu polling aktif.
 
 ---
 
-## 🖥️ PILIHAN 2: Deploy di VPS Ubuntu / Debian (Docker)
+## 🖥️ Alternatif: Deploy di VPS Ubuntu / Debian (Docker)
 
 Jika Anda memiliki VPS (seperti DigitalOcean, Biznet, Linode, dll):
 
@@ -51,5 +59,6 @@ Jika Anda memiliki VPS (seperti DigitalOcean, Biznet, Linode, dll):
 ## 📲 Cara Menggunakan Dari HP (Setelah Deploy):
 
 Buka Telegram di HP Anda -> Buka **Pesan Tersimpan (Saved Messages)**:
+- Ketik `/start` -> Memastikan bot merespons.
 - Ketik `/grup` -> Untuk melihat daftar grup Anda.
-- Ketik `/rangkum NamaGrup` -> Meringkas 1000 pesan grup secara rahasia!
+- Ketik `/summary` -> Membuat ringkasan pesan yang sudah tersimpan.

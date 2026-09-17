@@ -15,5 +15,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application files
 COPY . .
 
-# Command to run UserBot Listener Mode 24/7
-CMD ["python", "userbot_summarizer.py", "--listen"]
+# Run the Telegram bot in long-polling mode.
+CMD ["python", "bot.py"]
