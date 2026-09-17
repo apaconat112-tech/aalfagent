@@ -30,10 +30,13 @@ Tugas Anda adalah menganalisis histori obrolan grup Telegram dan menyusun Execut
 
 PRINSIP UTAMA:
 - WAJIB MENGGUNAKAN BAHASA INDONESIA YANG BAIK, PADAT, DAN CERDAS.
-- JANGAN ASAL MENGURANGI DETAIL PENTING: Tangkap fakta teknis spesifik, nama tools/produk, metode/solusi, angka, harga, tugas, dan username (@username) yang relevan.
+- JANGAN ASAL MENGURANGI DETAIL PENTING: Tangkap fakta teknis spesifik, nama tools/produk, metode/solusi, angka, harga, tanggal/jam, status, tugas, dan username (@username) yang relevan.
+- BACA SELURUH TRANSKRIP SEBELUM MENULIS. Kelompokkan pesan berdasarkan topik/isu, lalu catat siapa melakukan apa, kapan, hasil/statusnya, kendala, dan tindak lanjutnya.
+- Pertahankan detail penting meskipun hanya muncul satu kali. Jangan menebak atau mengarang; bedakan keputusan final dari usulan, pertanyaan, dan opini.
 - DILARANG KERAS MENAMPILKAN LANGKAH BERPIKIR / REASONING / ANALISIS INTERNAL (seperti '1. Analyze the Request:', '2. Analyze the Transcript:'). LANGSUNG MULAI HASIL DARI '📌 *TOPIK UTAMA*'.
 - HINDARI KALIMAT SAMAR/GENERIK: Tuliskan fakta langsung dan jelas.
 - BUANG FLUFF & BASA-BASI: Hapus kata pengantar, catatan internal, dan obrolan santai.
+- Jangan membatasi ringkasan menjadi hanya 2-3 poin jika ada beberapa topik berbeda. Gunakan sub-poin seperlunya.
 
 FORMAT WAJIB:
 
@@ -143,7 +146,7 @@ class ChatSummarizer:
                         contents=prompt,
                         config=types.GenerateContentConfig(
                             system_instruction=SYSTEM_PROMPT,
-                            max_output_tokens=2048,
+                            max_output_tokens=4096,
                             temperature=0.3,
                         )
                     )
@@ -176,7 +179,7 @@ class ChatSummarizer:
         model_name = self.model if self.model.startswith("claude") else config.ANTHROPIC_MODEL
         response = await self.anthropic_client.messages.create(
             model=model_name,
-            max_tokens=2048,
+            max_tokens=4096,
             system=SYSTEM_PROMPT,
             messages=[
                 {"role": "user", "content": prompt}
@@ -218,7 +221,7 @@ class ChatSummarizer:
                             {"role": "user", "content": prompt}
                         ],
                         "temperature": 0.3,
-                        "max_tokens": 2048
+                        "max_tokens": 4096
                     }
                     try:
                         resp = await client.post(url, json=payload, headers=headers)
@@ -260,11 +263,17 @@ class ChatSummarizer:
         )
         if is_intermediate:
             prompt += (
-                "Tolong rangkum semua poin utama, topik yang dibicarakan, keputusan, penugasan/action items, "
-                "dan link yang terdapat pada transkrip obrolan di atas. Catat fakta-fakta obrolan secara langsung dan padat."
+                "Buat CATATAN FAKTA untuk tahap penggabungan berikutnya, bukan ringkasan pendek yang menghilangkan detail. "
+                "Kelompokkan seluruh topik/isu dan untuk setiap topik catat fakta penting, angka/tanggal/jam, nama alat atau dokumen, "
+                "pertanyaan/kendala, usulan, keputusan final, status, action item, PIC (@username), deadline, serta semua URL. "
+                "Pertahankan detail yang hanya muncul satu kali, bedakan usulan dari keputusan, dan jangan mengarang informasi."
             )
         else:
-            prompt += "Tolong buat ringkasan lengkap sesuai format standar yang telah ditentukan."
+            prompt += (
+                "Buat ringkasan lengkap sesuai format standar. Pastikan setiap topik, angka, tanggal, nama, keputusan, kendala, "
+                "status, URL, dan penugasan penting dari transkrip terwakili. Gabungkan duplikasi, tetapi jangan membuang detail "
+                "yang membedakan satu isu dari isu lain."
+            )
 
         # Coba provider utama, jika gagal coba provider cadangan
         primary = self.provider
@@ -438,8 +447,11 @@ class ChatSummarizer:
                 consolidation_prompt = (
                     f"Berikut adalah poin-poin informasi dari total {total_msgs} pesan obrolan grup:\n\n"
                     f"{combined_intermediates}\n\n"
-                    f"Tolong rangkum & gabungkan poin-poin di atas menjadi SATU Executive Summary yang CERDAS, KAYA INFORMASI, SPESIFIK, dan TO-THE-POINT. "
-                    f"Hilangkan duplikasi obrolan, tetap pertahankan fakta teknis (nama alat/bot, angka, harga, solusi), serta @username PIC yang relevan. "
+                    f"Tolong gabungkan SEMUA informasi di atas menjadi SATU Executive Summary yang CERDAS, KAYA INFORMASI, SPESIFIK, dan TO-THE-POINT. "
+                    f"Jangan hanya mengambil poin yang paling sering muncul. Pertahankan juga fakta yang hanya muncul satu kali, termasuk nama/@username, "
+                    f"angka, tanggal/jam, harga, kode/ID, nama alat/dokumen, status, kendala, solusi, deadline, dan URL. "
+                    f"Hilangkan hanya duplikasi yang benar-benar sama, bedakan keputusan final dari usulan/pertanyaan, dan jangan mengarang fakta baru. "
+                    f"Cocokkan hasil dengan seluruh poin sumber sebelum menjawab agar tidak ada topik atau action item yang hilang. "
                     f"DILARANG KERAS menuliskan kata pengantar / basa-basi. "
                     f"LANGSUNG MULAI DENGAN FORMAT BERIKUT:\n\n"
                     f"📌 *TOPIK UTAMA*\n"
