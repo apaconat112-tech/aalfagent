@@ -3,7 +3,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Muat file .env jika ada
-env_path = Path(__file__).resolve().parent / ".env"
+PROJECT_ROOT = Path(__file__).resolve().parent
+env_path = PROJECT_ROOT / ".env"
 load_dotenv(dotenv_path=env_path)
 
 # Token Telegram Bot
@@ -71,8 +72,10 @@ elif ANTHROPIC_API_KEY and not GEMINI_API_KEY and not HERMES_API_KEY and AI_PROV
 
 # Konfigurasi ringkasan dan database
 DEFAULT_SUMMARY_HOURS = int(os.getenv("DEFAULT_SUMMARY_HOURS", "24"))
-DATABASE_PATH = os.getenv("DATABASE_PATH", "chat_history.db").strip()
-MAX_MESSAGES_PER_CHUNK = int(os.getenv("MAX_MESSAGES_PER_CHUNK", "150"))
+_database_value = os.getenv("DATABASE_PATH", "chat_history.db").strip()
+DATABASE_PATH = str((PROJECT_ROOT / _database_value).resolve()) if not Path(_database_value).is_absolute() else _database_value
+MAX_MESSAGES_PER_CHUNK = int(os.getenv("MAX_MESSAGES_PER_CHUNK", "80"))
+FAST_SUMMARY_MAX_MESSAGES = int(os.getenv("FAST_SUMMARY_MAX_MESSAGES", "80"))
 
 def validate_config() -> tuple[bool, str]:
     """Validasi apakah environment variable utama sudah diisi."""

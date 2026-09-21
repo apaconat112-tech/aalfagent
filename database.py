@@ -35,6 +35,24 @@ async def init_db() -> None:
                 updated_at TEXT NOT NULL
             );
         """)
+
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS satpam_settings (
+                chat_id INTEGER PRIMARY KEY,
+                enabled INTEGER DEFAULT 0,
+                mode TEXT DEFAULT 'admin_only',
+                updated_at TEXT NOT NULL
+            );
+        """)
+
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS satpam_whitelist (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                domain TEXT NOT NULL,
+                UNIQUE(chat_id, domain)
+            );
+        """)
         
         await db.commit()
         logger.info("Database initialized successfully at %s", DATABASE_PATH)
@@ -150,3 +168,68 @@ async def get_all_tracked_chats() -> List[int]:
         async with db.execute("SELECT DISTINCT chat_id FROM messages") as cursor:
             rows = await cursor.fetchall()
             return [row[0] for row in rows]
+
+# --- Satpam Grup Database Helpers ---
+
+async def get_satpam_settings(chat_id: int) -> Dict[str, Any]:
+    """Mendapatkan konfigurasi Satpam Grup."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("""
+            SELECT enabled, mode FROM satpam_settings WHERE chat_id = ?
+        """, (chat_id,)) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                return {"enabled": bool(row["enabled"]), "mode": row["mode"]}
+            return {"enabled": False, "mode": "admin_only"}
+
+async def set_satpam_settings(chat_id: int, enabled: bool, mode: str = "admin_only") -> None:
+    """Menyetel status dan mode Satpam Grup."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute("""
+            INSERT INTO satpam_settings (chat_id, enabled, mode, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(chat_id) DO UPDATE SET
+                enabled = excluded.enabled,
+                mode = excluded.mode,
+                updated_at = excluded.updated_at
+        """, (chat_id, 1 if enabled else 0, mode, now_iso))
+        await db.commit()
+
+async def add_whitelist_domain(chat_id: int, domain: str) -> bool:
+    """Menambahkan domain ke whitelist Satpam Grup."""
+    clean_domain = domain.strip().lower()
+    clean_domain = clean_domain.replace("https://", "").replace("http://", "").split("/")[0]
+    if not clean_domain:
+        return False
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        try:
+            await db.execute("""
+                INSERT INTO satpam_whitelist (chat_id, domain) VALUES (?, ?)
+            """, (chat_id, clean_domain))
+            await db.commit()
+            return True
+        except Exception:
+            return False
+
+async def remove_whitelist_domain(chat_id: int, domain: str) -> bool:
+    """Menghapus domain dari whitelist Satpam Grup."""
+    clean_domain = domain.strip().lower()
+    clean_domain = clean_domain.replace("https://", "").replace("http://", "").split("/")[0]
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        cursor = await db.execute("""
+            DELETE FROM satpam_whitelist WHERE chat_id = ? AND domain = ?
+        """, (chat_id, clean_domain))
+        await db.commit()
+        return cursor.rowcount > 0
+
+async def get_whitelist_domains(chat_id: int) -> List[str]:
+    """Mengambil daftar domain whitelist untuk suatu grup."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        async with db.execute("""
+            SELECT domain FROM satpam_whitelist WHERE chat_id = ? ORDER BY domain ASC
+        """, (chat_id,)) as cursor:
+            rows = await cursor.fetchall()
+            return [row[0] for row in rows]
+

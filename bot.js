@@ -47,7 +47,46 @@ function scheduledContext(chatId) {
   };
 }
 
-bot.command(['start', 'help'], ctx => ctx.reply('👋 Saya adalah Telegram AI Assistant & Summarizer Bot.\n\nPerintah: /summary [6h|2d], /schedule <jam>, /unschedule, /groups, /model [gemini|anthropic|hermes].\n\nDi DM, kirim pesan untuk chat AI. Di grup, mention bot atau reply pesan bot untuk bertanya.'));
+function extractUrls(ctx) {
+  const text = ctx.message?.text || ctx.message?.caption || '';
+  const urls = [];
+  const entities = ctx.message?.entities || ctx.message?.caption_entities || [];
+  for (const ent of entities) {
+    if (ent.type === 'url') urls.push(text.substring(ent.offset, ent.offset + ent.length));
+    else if (ent.type === 'text_link' && ent.url) urls.push(ent.url);
+  }
+  const regex = /(?:https?:\/\/|www\.|[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\/?)[^\s]*/g;
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    if (!urls.includes(match[0])) urls.push(match[0]);
+  }
+  return urls;
+}
+function extractDomain(url) {
+  let clean = url.trim().toLowerCase();
+  if (!clean.startsWith('http://') && !clean.startsWith('https://')) clean = 'http://' + clean;
+  try {
+    const u = new URL(clean);
+    let dom = u.hostname;
+    if (dom.startsWith('www.')) dom = dom.slice(4);
+    return dom;
+  } catch (e) {
+    return clean.split('/')[0];
+  }
+}
+async function isUserAdmin(ctx) {
+  if (ctx.chat?.type === 'private') return true;
+  if (ctx.message?.sender_chat?.id === ctx.chat?.id) return true;
+  if (!ctx.from?.id) return false;
+  try {
+    const member = await ctx.api.getChatMember(ctx.chat.id, ctx.from.id);
+    return ['administrator', 'creator'].includes(member.status);
+  } catch (e) {
+    return false;
+  }
+}
+
+bot.command(['start', 'help'], ctx => ctx.reply('👋 Saya adalah Telegram AI Assistant, Group Satpam & Summarizer Bot.\n\nPerintah: /summary [6h|2d], /satpam [on|off|mode|add|del|list], /schedule <jam>, /unschedule, /groups, /model [gemini|anthropic|hermes].\n\nDi DM, kirim pesan untuk chat AI. Di grup, mention bot atau reply pesan bot untuk bertanya.'));
 bot.command('summary', ctx => performSummary(ctx.chat.id, ctx, parseTimeframe(ctx.match?.trim()), ctx.msg.message_id));
 bot.command(['groups', 'grup'], async ctx => { const chats = database.getAllTrackedChats(); await ctx.reply(chats.length ? `📋 Chat yang dipantau:\n${chats.map(id => `• ${id}`).join('\n')}` : 'ℹ️ Belum ada obrolan yang tersimpan.'); });
 bot.command('model', ctx => ctx.reply(`🤖 Provider aktif: ${config.aiProvider}\nModel: ${config[`${config.aiProvider}Model`] || config.hermesModel}`));
@@ -60,8 +99,77 @@ bot.command('schedule', async ctx => {
 });
 bot.command('unschedule', async ctx => { const chatId = ctx.chat.id; database.setChatSchedule(chatId, 0); if (schedules.has(chatId)) clearInterval(schedules.get(chatId)); schedules.delete(chatId); await ctx.reply('🛑 Ringkasan terjadwal dimatikan.'); });
 
+bot.command('satpam', async ctx => {
+  if (ctx.chat?.type === 'private') return ctx.reply('⚠️ Fitur Satpam Grup hanya dapat digunakan di Grup Telegram.');
+  const args = ctx.match?.trim().split(/\s+/) || [];
+  const subcommand = args[0]?.toLowerCase() || 'status';
+  const isAdmin = await isUserAdmin(ctx);
+
+  if (['on', 'off', 'mode', 'add', 'del'].includes(subcommand) && !isAdmin) {
+    return ctx.reply('⛔ Hanya Admin Grup yang berhak mengubah pengaturan Satpam Grup.');
+  }
+
+  const cfg = database.getSatpamSettings(ctx.chat.id);
+  if (['status', 'info'].includes(subcommand)) {
+    const wl = database.getWhitelistDomains(ctx.chat.id);
+    return ctx.reply(`🛡 STATUS SATPAM GRUP:\n• Status: ${cfg.enabled ? '🟢 AKTIF' : '🔴 NON-AKTIF'}\n• Mode: ${cfg.mode}\n• Whitelist: ${wl.join(', ') || 'Belum ada'}\n\nPenggunaan: /satpam [on|off], /satpam mode [admin|whitelist], /satpam add <domain>, /satpam del <domain>, /satpam list`);
+  } else if (subcommand === 'on') {
+    database.setSatpamSettings(ctx.chat.id, true, cfg.mode);
+    return ctx.reply('🟢 Satpam Grup DIAKTIFKAN!');
+  } else if (subcommand === 'off') {
+    database.setSatpamSettings(ctx.chat.id, false, cfg.mode);
+    return ctx.reply('🔴 Satpam Grup DIMATIKAN.');
+  } else if (subcommand === 'mode') {
+    const newMode = args[1]?.toLowerCase() === 'whitelist' ? 'whitelist' : 'admin_only';
+    database.setSatpamSettings(ctx.chat.id, cfg.enabled, newMode);
+    return ctx.reply(`⚙️ Mode Satpam diubah ke: ${newMode}`);
+  } else if (subcommand === 'add') {
+    if (!args[1]) return ctx.reply('⚠️ Masukkan domain. Contoh: /satpam add github.com');
+    database.addWhitelistDomain(ctx.chat.id, args[1]);
+    return ctx.reply(`✅ Domain ${args[1]} ditambahkan ke Whitelist.`);
+  } else if (subcommand === 'del') {
+    if (!args[1]) return ctx.reply('⚠️ Masukkan domain. Contoh: /satpam del github.com');
+    database.removeWhitelistDomain(ctx.chat.id, args[1]);
+    return ctx.reply(`🗑 Domain ${args[1]} dihapus dari Whitelist.`);
+  } else if (subcommand === 'list') {
+    const wl = database.getWhitelistDomains(ctx.chat.id);
+    return ctx.reply(`📋 WHITELIST DOMAIN:\n${wl.map(d => `• ${d}`).join('\n') || 'Kosong'}`);
+  }
+});
+
 bot.on('message:text', async ctx => {
   const text = ctx.message.text; const user = ctx.from; const chat = ctx.chat;
+
+  if (chat.type !== 'private') {
+    const cfg = database.getSatpamSettings(chat.id);
+    if (cfg.enabled) {
+      const urls = extractUrls(ctx);
+      if (urls.length > 0) {
+        const isAdmin = await isUserAdmin(ctx);
+        if (!isAdmin) {
+          let prohibited = false;
+          if (cfg.mode === 'whitelist') {
+            const wl = database.getWhitelistDomains(chat.id);
+            prohibited = urls.some(u => {
+              const dom = extractDomain(u);
+              return !wl.some(w => dom === w || dom.endsWith('.' + w));
+            });
+          } else {
+            prohibited = true;
+          }
+          if (prohibited) {
+            try { await ctx.api.deleteMessage(chat.id, ctx.message.message_id); } catch (e) {}
+            try {
+              const warn = await ctx.reply(`⚠️ @${user?.username || user?.first_name}, link tidak diizinkan di grup ini!`);
+              setTimeout(() => ctx.api.deleteMessage(chat.id, warn.message_id).catch(() => {}), 10000);
+            } catch (e) {}
+            return;
+          }
+        }
+      }
+    }
+  }
+
   database.saveMessage({ chatId: chat.id, messageId: ctx.message.message_id, userId: user?.id, username: user?.username, fullName: [user?.first_name, user?.last_name].filter(Boolean).join(' '), text, timestamp: ctx.message.date * 1000 });
   const botInfo = await bot.api.getMe(); const mentioned = text.toLowerCase().includes(`@${botInfo.username.toLowerCase()}`); const replied = ctx.message.reply_to_message?.from?.id === botInfo.id;
   if (chat.type !== 'private' && !mentioned && !replied) return;
@@ -77,4 +185,4 @@ for (const schedule of database.getAllActiveSchedules()) {
 setInterval(() => console.log(`Database cleanup: ${database.cleanupOldMessages(30)} pesan dihapus`), 86400000);
 bot.catch(err => console.error('Telegram update error:', err.error instanceof GrammyError ? err.error.description : err.error));
 console.log(`Starting Node.js bot with provider ${config.aiProvider}`);
-bot.start({ drop_pending_updates: false });
+bot.start({ drop_pending_updates: false });

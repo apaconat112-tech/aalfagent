@@ -19,6 +19,7 @@ from config import (
     HERMES_MODEL,
     HERMES_BASE_URL,
     MAX_MESSAGES_PER_CHUNK,
+    FAST_SUMMARY_MAX_MESSAGES,
 )
 
 logger = logging.getLogger(__name__)
@@ -106,7 +107,18 @@ def format_messages_transcript(messages: List[Dict[str, Any]]) -> str:
 
 def chunk_messages(messages: List[Dict[str, Any]], chunk_size: int = MAX_MESSAGES_PER_CHUNK) -> List[List[Dict[str, Any]]]:
     """Membagi pesan menjadi beberapa batch jika jumlah pesan sangat banyak."""
+    if chunk_size <= 0:
+        chunk_size = MAX_MESSAGES_PER_CHUNK
     return [messages[i:i + chunk_size] for i in range(0, len(messages), chunk_size)]
+
+
+def get_summary_chunk_plan(message_count: int) -> int:
+    """Pilih strategi pemecahan ringkasan yang lebih cepat untuk jumlah pesan normal."""
+    if message_count <= FAST_SUMMARY_MAX_MESSAGES:
+        return 1
+    if message_count <= MAX_MESSAGES_PER_CHUNK * 2:
+        return 2
+    return max(2, min(4, (message_count + FAST_SUMMARY_MAX_MESSAGES - 1) // FAST_SUMMARY_MAX_MESSAGES))
 
 class ChatSummarizer:
     def __init__(self, provider: Optional[str] = None, model: Optional[str] = None):
@@ -127,45 +139,42 @@ class ChatSummarizer:
             self.model = model or config.HERMES_MODEL
 
     async def _call_gemini(self, prompt: str) -> str:
-        """Panggil Google Gemini API (Gratis) dengan retry otomatis & fallback jika server busy 503."""
+        """Panggil Google Gemini dengan daftar model yang valid dan aman dari rate limit."""
         if not self.gemini_client:
             self.gemini_client = genai.Client(api_key=config.GEMINI_API_KEY)
 
-        models_to_try = [m for m in [config.GEMINI_MODEL, "gemini-3.6-flash"] if m.startswith("gemini")]
-        if self.model and self.model.startswith("gemini") and self.model not in models_to_try:
-            models_to_try.insert(0, self.model)
-        seen = set()
-        models_to_try = [m for m in models_to_try if not (m in seen or seen.add(m))]
-        last_exception = None
+        models_to_try = []
+        if self.model and self.model.startswith("gemini"):
+            models_to_try.append(self.model)
+        for m in ["gemini-3.6-flash", "gemini-2.5-flash"]:
+            if m.startswith("gemini") and m not in models_to_try:
+                models_to_try.append(m)
 
+        last_exception = None
         for target_model in models_to_try:
-            for attempt in range(3):
-                try:
-                    response = await self.gemini_client.aio.models.generate_content(
-                        model=target_model,
-                        contents=prompt,
-                        config=types.GenerateContentConfig(
-                            system_instruction=SYSTEM_PROMPT,
-                            max_output_tokens=4096,
-                            temperature=0.3,
-                        )
+            try:
+                response = await self.gemini_client.aio.models.generate_content(
+                    model=target_model,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        system_instruction=SYSTEM_PROMPT,
+                        max_output_tokens=2048,
+                        temperature=0.2,
                     )
-                    if response and response.text:
-                        return response.text
-                except Exception as e:
-                    last_exception = e
-                    err_str = str(e).lower()
-                    if "429" in err_str or "quota" in err_str or "resource_exhausted" in err_str:
-                        logger.warning("Gemini model %s rate limited (429, attempt %d/3). Retrying in 5s...", target_model, attempt + 1)
-                        await asyncio.sleep(5)
-                    elif "404" in err_str or "not_found" in err_str:
-                        logger.warning("Gemini model %s not found (404), trying next model...", target_model)
-                        break
-                    elif "503" in err_str or "unavailable" in err_str:
-                        logger.warning("Gemini API (%s) busy (attempt %d/3): %s. Retrying...", target_model, attempt+1, e)
-                        await asyncio.sleep(2)
-                    else:
-                        break
+                )
+                if response and response.text:
+                    return response.text
+            except Exception as e:
+                last_exception = e
+                err_str = str(e).lower()
+                if "404" in err_str or "not_found" in err_str:
+                    logger.warning("Gemini model %s not found or deprecated, trying next model...", target_model)
+                    continue
+                if "429" in err_str or "quota" in err_str or "resource_exhausted" in err_str:
+                    logger.warning("Gemini model %s rate limited; skipping to next backend...", target_model)
+                    break
+                logger.warning("Gemini model %s failed: %s", target_model, e)
+                break
 
         if last_exception:
             raise last_exception
@@ -188,7 +197,7 @@ class ChatSummarizer:
         return response.content[0].text
 
     async def _call_hermes(self, prompt: str, system_instruction: str = SYSTEM_PROMPT) -> str:
-        """Panggil Hermes AI API via OpenRouter / Ollama (OpenAI-compatible endpoint)."""
+        """Panggil Hermes AI API dengan retry terbatas agar ringkasan cepat."""
         headers = {"Content-Type": "application/json"}
         if config.HERMES_API_KEY:
             headers["Authorization"] = f"Bearer {config.HERMES_API_KEY}"
@@ -200,56 +209,49 @@ class ChatSummarizer:
         models_to_try = []
         if self.model and not self.model.startswith("gemini") and not self.model.startswith("claude"):
             models_to_try.append(self.model)
-        for m in [
-            "openrouter/auto",
-            "google/gemma-4-31b-it:free",
-            "z-ai/glm-5.2:free",
-            "google/gemma-4-26b-a4b-it:free",
-            "liquid/lfm-2.5-2.6b:free"
-        ]:
+        for m in ["openrouter/auto", "google/gemma-4-31b-it:free"]:
             if m not in models_to_try:
                 models_to_try.append(m)
 
         last_err = None
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             for model_name in models_to_try:
-                for attempt in range(4):
-                    payload = {
-                        "model": model_name,
-                        "messages": [
-                            {"role": "system", "content": system_instruction},
-                            {"role": "user", "content": prompt}
-                        ],
-                        "temperature": 0.3,
-                        "max_tokens": 4096
-                    }
-                    try:
-                        resp = await client.post(url, json=payload, headers=headers)
-                        if resp.status_code == 200:
-                            data = resp.json()
-                            msg = data["choices"][0]["message"]
-                            content = msg.get("content")
-                            if not content and msg.get("reasoning"):
-                                content = msg.get("reasoning")
-                            if content and str(content).strip():
-                                return str(content)
-                            logger.warning("OpenRouter model %s returned empty/null content: %s", model_name, data)
-                        elif resp.status_code in [429, 503]:
-                            wait_s = 4 * (attempt + 1)
-                            logger.warning("OpenRouter model %s rate limited (%d, attempt %d/4). Retrying in %ds...", model_name, resp.status_code, attempt + 1, wait_s)
-                            await asyncio.sleep(wait_s)
-                        elif resp.status_code in [400, 402, 404]:
-                            logger.warning("OpenRouter model %s error status %d, skipping to next model...", model_name, resp.status_code)
-                            last_err = f"OpenRouter Error ({resp.status_code}): {resp.text}"
-                            break
-                        else:
-                            logger.warning("OpenRouter model %s returned status %d: %s", model_name, resp.status_code, resp.text)
-                            last_err = f"OpenRouter Error ({resp.status_code}): {resp.text}"
-                            break
-                    except Exception as req_err:
-                        logger.warning("OpenRouter request error on %s: %s", model_name, req_err)
-                        last_err = str(req_err)
-                        await asyncio.sleep(2)
+                payload = {
+                    "model": model_name,
+                    "messages": [
+                        {"role": "system", "content": system_instruction},
+                        {"role": "user", "content": prompt}
+                    ],
+                    "temperature": 0.2,
+                    "max_tokens": 2048
+                }
+                try:
+                    resp = await client.post(url, json=payload, headers=headers)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        msg = data["choices"][0]["message"]
+                        content = msg.get("content")
+                        if not content and msg.get("reasoning"):
+                            content = msg.get("reasoning")
+                        if content and str(content).strip():
+                            return str(content)
+                        logger.warning("OpenRouter model %s returned empty/null content: %s", model_name, data)
+                    elif resp.status_code in [429, 503]:
+                        logger.warning("OpenRouter model %s rate limited (%d), trying next model...", model_name, resp.status_code)
+                        last_err = f"OpenRouter Error ({resp.status_code}): {resp.text}"
+                        continue
+                    elif resp.status_code in [400, 402, 404]:
+                        logger.warning("OpenRouter model %s error status %d, skipping to next model...", model_name, resp.status_code)
+                        last_err = f"OpenRouter Error ({resp.status_code}): {resp.text}"
+                        continue
+                    else:
+                        logger.warning("OpenRouter model %s returned status %d: %s", model_name, resp.status_code, resp.text)
+                        last_err = f"OpenRouter Error ({resp.status_code}): {resp.text}"
+                        continue
+                except Exception as req_err:
+                    logger.warning("OpenRouter request error on %s: %s", model_name, req_err)
+                    last_err = str(req_err)
+                    continue
 
         raise RuntimeError(last_err or "OpenRouter call failed")
 
@@ -309,7 +311,7 @@ class ChatSummarizer:
         """Panggil Gemini untuk Chat Interaktif dengan fallback model."""
         if not self.gemini_client:
             self.gemini_client = genai.Client(api_key=config.GEMINI_API_KEY)
-        models_to_try = [m for m in [config.GEMINI_MODEL, "gemini-3.6-flash"] if m.startswith("gemini")]
+        models_to_try = [m for m in [config.GEMINI_MODEL, "gemini-3.6-flash"] if m and m.startswith("gemini")]
         if self.model and self.model.startswith("gemini") and self.model not in models_to_try:
             models_to_try.insert(0, self.model)
         seen = set()
@@ -441,17 +443,15 @@ class ChatSummarizer:
         messages: List[Dict[str, Any]],
         timeframe_info: str = ""
     ) -> str:
-        """
-        Meringkas daftar pesan. Jika jumlah pesan sangat banyak, 
-        menggunakan pendekatan Hierarchical / Map-Reduce chunking.
-        """
+        """Meringkas pesan dengan strategi cepat untuk jumlah pesan normal dan chunking terbatas untuk data besar."""
         if not messages:
             return "⚠️ Tidak ada pesan baru untuk diringkas."
 
         total_msgs = len(messages)
-        chunks = chunk_messages(messages, MAX_MESSAGES_PER_CHUNK)
+        chunk_plan = get_summary_chunk_plan(total_msgs)
+        chunks = chunk_messages(messages, max(1, total_msgs // chunk_plan if chunk_plan > 1 else FAST_SUMMARY_MAX_MESSAGES))
 
-        logger.info("Processing summary for %d messages across %d chunk(s) using %s (%s)", 
+        logger.info("Processing summary for %d messages across %d chunk(s) using %s (%s)",
                     total_msgs, len(chunks), self.provider, self.model)
 
         try:
@@ -459,31 +459,26 @@ class ChatSummarizer:
                 transcript = format_messages_transcript(chunks[0])
                 summary_content = await self.summarize_chunk(transcript, is_intermediate=False)
             else:
-                logger.info("Summarizing %d chunks in parallel...", len(chunks))
+                logger.info("Summarizing %d chunks with fast aggregation...", len(chunks))
                 tasks = [self.summarize_chunk(format_messages_transcript(chunk), is_intermediate=True) for chunk in chunks]
                 intermediate_summaries = list(await asyncio.gather(*tasks))
-
                 combined_intermediates = "\n\n".join(intermediate_summaries)
                 consolidation_prompt = (
-                    f"Berikut adalah poin-poin informasi dari total {total_msgs} pesan obrolan grup:\n\n"
+                    f"Berikut adalah ringkasan parsial dari {total_msgs} pesan obrolan grup:\n\n"
                     f"{combined_intermediates}\n\n"
-                    f"Tolong gabungkan SEMUA informasi di atas menjadi SATU Executive Summary yang CERDAS, KAYA INFORMASI, SPESIFIK, dan TO-THE-POINT. "
-                    f"Jangan hanya mengambil poin yang paling sering muncul. Pertahankan juga fakta yang hanya muncul satu kali, termasuk nama/@username, "
-                    f"angka, tanggal/jam, harga, kode/ID, nama alat/dokumen, status, kendala, solusi, deadline, dan URL. "
-                    f"Hilangkan hanya duplikasi yang benar-benar sama, bedakan keputusan final dari usulan/pertanyaan, dan jangan mengarang fakta baru. "
-                    f"Cocokkan hasil dengan seluruh poin sumber sebelum menjawab agar tidak ada topik atau action item yang hilang. "
-                    f"DILARANG KERAS menuliskan kata pengantar / basa-basi. "
-                    f"LANGSUNG MULAI DENGAN FORMAT BERIKUT:\n\n"
+                    f"Gabungkan semua detail penting menjadi satu Executive Summary yang padat dan akurat. "
+                    f"Pertahankan nama/@username, angka, tanggal/jam, status, keputusan, action item, dan link penting. "
+                    f"Bedakan keputusan final dari usulan. Jangan mengarang fakta baru. "
+                    f"Langsung mulai dengan format berikut:\n\n"
                     f"📌 *TOPIK UTAMA*\n"
-                    f"- [Poin utama kaya detail & fakta teknis]\n\n"
+                    f"• [Fakta utama]\n\n"
                     f"✅ *KEPUTUSAN & KESEPAKATAN*\n"
-                    f"- [Keputusan final/operasional spesifik atau 'Tidak ada keputusan khusus']\n\n"
+                    f"• [Keputusan final atau 'Tidak ada keputusan khusus']\n\n"
                     f"📋 *ACTION ITEMS & TINDAK LANJUT*\n"
-                    f"- [Poin tugas & @username PIC atau 'Tidak ada action item']\n\n"
+                    f"• [Tugas & PIC atau 'Tidak ada action item']\n\n"
                     f"🔗 *LINK & REFERENSI PENTING*\n"
-                    f"- [Keterangan]: URL (atau 'Tidak ada tautan dibagikan')"
+                    f"• [Keterangan]: URL"
                 )
-
                 summary_content = await self.summarize_chunk(consolidation_prompt, is_intermediate=False)
 
             if self.provider == "gemini":
@@ -499,15 +494,21 @@ class ChatSummarizer:
             if timeframe_info:
                 header += f"🕒 Periode: _{timeframe_info}_\n"
             header += f"💬 Total Pesan: *{total_msgs} pesan*\n\n"
-            
+
             footer = f"\n\n_— Diringkas otomatis dengan {ai_label}_"
             return f"{header}{summary_content}{footer}"
 
         except Exception as e:
             logger.exception("Error during summarization: %s", e)
             err_str = str(e)
-            if "API_KEY" in err_str.upper() or "API KEY" in err_str.upper() or "INVALID" in err_str.upper():
+            lower_err = err_str.lower()
+            if "api_key" in lower_err or "api key" in lower_err or "invalid" in lower_err:
                 return f"❌ *Error API Key:* API Key {self.provider.upper()} tidak valid atau belum diisi. Periksa file `.env`."
-            elif "RESOURCE_EXHAUSTED" in err_str or "RATE_LIMIT" in err_str.upper():
-                return f"⏳ *Error Rate Limit:* Terkena kuota limit {self.provider.upper()}. Silakan coba lagi sebentar lagi."
+            if "resource_exhausted" in lower_err or "rate_limit" in lower_err or "429" in err_str or "quota" in lower_err:
+                return (
+                    "⏳ *AI sedang rate-limited / kuota habis.*\n\n"
+                    "Solusi: gunakan API key yang valid untuk provider lain, atau tunggu beberapa menit lalu coba lagi."
+                )
+            if "not_found" in lower_err or "404" in err_str:
+                return "❌ *Model AI yang dipilih tidak tersedia lagi.* Perbarui konfigurasi model di file `.env` atau pakai provider lain."
             return f"❌ *Terjadi kesalahan saat memproses ringkasan:* {err_str}"

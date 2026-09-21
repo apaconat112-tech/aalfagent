@@ -1,8 +1,10 @@
+import asyncio
 import logging
 import re
 import socket
 from datetime import datetime, timezone, timedelta
 from typing import Optional
+from urllib.parse import urlparse
 
 # Force IPv4 resolution to fix Windows IPv6 unreachable route issues
 _original_getaddrinfo = socket.getaddrinfo
@@ -37,6 +39,67 @@ logger = logging.getLogger(__name__)
 # Inisialisasi Summarizer
 summarizer = ChatSummarizer()
 
+def extract_urls(msg) -> list[str]:
+    """Mengambil semua URL/link dari pesan teks atau message entities."""
+    urls = []
+    text = msg.text or msg.caption or ""
+    
+    # 1. Cek dari Telegram entities (url & text_link)
+    entities = msg.entities or msg.caption_entities or []
+    for entity in entities:
+        if entity.type == constants.MessageEntityType.URL:
+            url_str = text[entity.offset : entity.offset + entity.length]
+            urls.append(url_str)
+        elif entity.type == constants.MessageEntityType.TEXT_LINK and entity.url:
+            urls.append(entity.url)
+
+    # 2. Fallback regex untuk URL dalam teks
+    regex = r"(?:https?://|www\.|[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/?)[^\s]*"
+    found_regex = re.findall(regex, text)
+    for u in found_regex:
+        if u not in urls:
+            urls.append(u)
+
+    return urls
+
+def extract_domain(url: str) -> str:
+    """Mengambil domain utama dari URL (misal https://github.com/foo -> github.com)."""
+    clean_url = url.strip().lower()
+    if not clean_url.startswith(("http://", "https://")):
+        clean_url = "http://" + clean_url
+    try:
+        parsed = urlparse(clean_url)
+        domain = parsed.netloc or parsed.path.split("/")[0]
+        if domain.startswith("www."):
+            domain = domain[4:]
+        return domain.split(":")[0]
+    except Exception:
+        return clean_url.split("/")[0]
+
+async def is_user_admin(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: Optional[int], sender_chat=None) -> bool:
+    """Mengecek apakah pengirim pesan adalah Admin/Creator di grup."""
+    if not user_id and not sender_chat:
+        return False
+    if sender_chat and sender_chat.id == chat_id:
+        return True
+    if not user_id:
+        return False
+    try:
+        member = await context.bot.get_chat_member(chat_id, user_id)
+        return member.status in [constants.ChatMemberStatus.ADMINISTRATOR, constants.ChatMemberStatus.OWNER]
+    except Exception as e:
+        logger.warning("Gagal mengecek status admin user %s di chat %s: %s", user_id, chat_id, e)
+        return False
+
+async def _delete_message_after_delay(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int, delay_seconds: int = 10) -> None:
+    """Menghapus pesan otomatis setelah jeda waktu tertentu."""
+    await asyncio.sleep(delay_seconds)
+    try:
+        await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
+    except Exception:
+        pass
+
+
 def parse_timeframe_args(args: list[str]) -> Optional[timedelta]:
     """Parse argumen waktu seperti '6h', '24h', '3d', atau '12' (default jam)."""
     if not args:
@@ -55,6 +118,34 @@ def parse_timeframe_args(args: list[str]) -> Optional[timedelta]:
         
     return None
 
+async def private_userbot_ready() -> bool:
+    """Cek apakah session Telethon valid dan akun user siap dipakai untuk private-userbot mode."""
+    if not config.TELEGRAM_STRING_SESSION or not config.TELEGRAM_API_ID or not config.TELEGRAM_API_HASH:
+        logger.info("Private userbot disabled: missing TELEGRAM_STRING_SESSION/API credentials.")
+        return False
+
+    try:
+        api_id = int(config.TELEGRAM_API_ID)
+        from telethon import TelegramClient
+        from telethon.sessions import StringSession
+
+        client = TelegramClient(
+            StringSession(config.TELEGRAM_STRING_SESSION),
+            api_id,
+            config.TELEGRAM_API_HASH,
+            receive_updates=False,
+        )
+        await client.connect()
+        try:
+            is_authorized = await client.is_user_authorized()
+            logger.info("Private userbot auth status: %s", is_authorized)
+            return bool(is_authorized)
+        finally:
+            await client.disconnect()
+    except Exception as e:
+        logger.warning("Private userbot session is unavailable: %s", e)
+        return False
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handler untuk perintah /start dan /help."""
     if config.AI_PROVIDER == "gemini":
@@ -65,17 +156,20 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         ai_name = f"Nous-Hermes ({config.HERMES_MODEL})"
 
     text = (
-        "👋 *Halo! Saya adalah Telegram AI Assistant & Summarizer Bot (@Nier_12bot).*\n\n"
+        "👋 *Halo! Saya adalah Telegram AI Assistant, Group Satpam & Summarizer Bot (@Nier_12bot).*\n\n"
         f"Saya siap membantu Anda menjawab pertanyaan, mengobrol (*interactive chat*), "
+        f"menjaga keamanan grup dari link terlarang (*Satpam Grup*), "
         f"dan merangkum obrolan grup secara otomatis bertenaga AI (*{ai_name}*).\n\n"
         "📌 *FITUR UTAMA:*\n"
         "• *Chat Interaktif*: Kirim pesan langsung di DM untuk bertanya atau berdiskusi dengan AI!\n"
         "• *Ringkasan Grup*: Merangkum topik, keputusan, action items (PIC), dan link penting di grup Telegram.\n"
+        "• *Satpam Grup*: Melarang link anomali/terlarang dari anggota biasa. Hanya Admin atau Domain Whitelist yang diizinkan!\n"
         "• *Check Kuota AI & List Grup*: Pantau status model AI, sisa kuota (%), dan grup yang dipantau.\n"
         "• *Ringkasan Terjadwal*: Mengirimkan ringkasan berkala secara otomatis di grup.\n\n"
         "🛠 *DAFTAR PERINTAH LENGKAP:*\n"
         "• `/summary` — Meringkas chat grup sejak ringkasan terakhir (atau 24 jam terakhir).\n"
         "• `/summary 3h` — Meringkas pesan 3 jam terakhir (bisa juga `6h`, `12h`, `2d`, dll).\n"
+        "• `/satpam` — Pengaturan Satpam Grup (`/satpam on|off`, `/satpam mode admin|whitelist`, `/satpam add <domain>`, `/satpam list`).\n"
         "• `/grup` atau `/groups` — Menampilkan daftar grup Telegram yang dipantau bot.\n"
         "• `/model` — Cek status provider AI aktif, sisa kuota (%), atau ganti model (`/model hermes`, `/model gemini`, `/model claude`).\n"
         "• `/schedule <jam>` — Aktifkan ringkasan terjadwal tiap X jam (contoh: `/schedule 6`).\n"
@@ -110,7 +204,47 @@ async def message_logger(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # Menggunakan date dari message Telegram (UTC)
     timestamp = msg.date if msg.date else datetime.now(timezone.utc)
 
-    # 1. Simpan setiap pesan teks masuk ke database SQLite
+    # --- SATPAM GRUP: Pengecekan Link / Anti-Spam Filter ---
+    if chat.type in [constants.ChatType.GROUP, constants.ChatType.SUPERGROUP]:
+        satpam_cfg = await database.get_satpam_settings(chat_id)
+        if satpam_cfg.get("enabled"):
+            urls = extract_urls(msg)
+            if urls:
+                is_admin = await is_user_admin(context, chat_id, user_id, sender_chat=msg.sender_chat)
+                if not is_admin:
+                    mode = satpam_cfg.get("mode", "admin_only")
+                    prohibited = False
+                    if mode == "whitelist":
+                        whitelisted_domains = await database.get_whitelist_domains(chat_id)
+                        for u in urls:
+                            dom = extract_domain(u)
+                            is_allowed = any(dom == w or dom.endswith("." + w) for w in whitelisted_domains)
+                            if not is_allowed:
+                                prohibited = True
+                                break
+                    else:
+                        prohibited = True
+
+                    if prohibited:
+                        # Hapus pesan link terlarang dari grup
+                        try:
+                            await context.bot.delete_message(chat_id=chat_id, message_id=msg.message_id)
+                        except Exception as e:
+                            logger.warning("Satpam gagal menghapus pesan link (%s): %s", msg.message_id, e)
+
+                        # Kirim notifikasi peringatan sementara yang otomatis terhapus
+                        user_tag = f"@{username}" if username else (full_name or f"User_{user_id}")
+                        warn_text = f"⚠️ *SATPAM GRUP:* {user_tag}, link tidak diizinkan di grup ini!\nHanya Admin / Link Resmi yang diperbolehkan."
+                        try:
+                            warn_msg = await context.bot.send_message(chat_id=chat_id, text=warn_text, parse_mode=constants.ParseMode.MARKDOWN)
+                            asyncio.create_task(_delete_message_after_delay(context, chat_id, warn_msg.message_id, 10))
+                        except Exception as e:
+                            logger.warning("Gagal mengirim notifikasi satpam: %s", e)
+
+                        # Hentikan proses, pesan terlarang TIDAK disimpan ke DB summarizer
+                        return
+
+    # 1. Simpan pesan yang valid ke database SQLite
     await database.save_message(
         chat_id=chat_id,
         message_id=msg.message_id,
@@ -120,6 +254,7 @@ async def message_logger(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         text=msg.text,
         timestamp=timestamp
     )
+
 
     # 2. Cek apakah ini chat pribadi (DM) atau bot di-mention / di-reply di grup
     is_private = (chat.type == constants.ChatType.PRIVATE)
@@ -386,10 +521,11 @@ async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     chat_id = update.effective_chat.id
     reply_to_id = update.effective_message.message_id
-    
-    # Jika diketik di DM Bot dengan argumen nama grup
-    if update.effective_chat.type == constants.ChatType.PRIVATE and context.args and config.TELEGRAM_STRING_SESSION:
-        raw_input = " ".join(context.args)
+
+    # Di DM Bot, prioritas selalu ke private-userbot mode jika session valid.
+    # Ini memastikan bot tidak perlu masuk ke grup untuk membaca/merangkum grup milik pengguna.
+    if update.effective_chat.type == constants.ChatType.PRIVATE and await private_userbot_ready():
+        raw_input = " ".join(context.args) if context.args else "24h"
         await perform_private_userbot_summary(update, context, raw_input, reply_to_id)
         return
 
@@ -401,8 +537,8 @@ async def grup_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not update.effective_message or not update.effective_chat:
         return
 
-    # Jika diketik di DM Bot, tampilkan daftar grup akun pengguna via Telethon
-    if update.effective_chat.type == constants.ChatType.PRIVATE and config.TELEGRAM_STRING_SESSION:
+    # Jika diketik di DM Bot, tampilkan daftar grup akun pengguna via Telethon hanya jika session valid
+    if update.effective_chat.type == constants.ChatType.PRIVATE and await private_userbot_ready():
         try:
             from userbot_summarizer import get_telethon_client
             client = await get_telethon_client()
@@ -576,6 +712,108 @@ async def unschedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         parse_mode=constants.ParseMode.MARKDOWN
     )
 
+async def satpam_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handler perintah /satpam untuk mengatur Satpam Grup."""
+    if not update.effective_chat or not update.effective_message:
+        return
+
+    chat = update.effective_chat
+    if chat.type not in [constants.ChatType.GROUP, constants.ChatType.SUPERGROUP]:
+        await update.effective_message.reply_text("⚠️ Fitur Satpam Grup hanya dapat digunakan di dalam Grup Telegram.")
+        return
+
+    chat_id = chat.id
+    user = update.effective_user
+    user_id = user.id if user else None
+
+    # Cek apakah user adalah Admin Grup
+    is_admin = await is_user_admin(context, chat_id, user_id, sender_chat=update.effective_message.sender_chat)
+
+    args = context.args or []
+    subcommand = args[0].lower() if args else "status"
+
+    # Perintah pengubahan hanya untuk Admin Grup
+    if subcommand in ["on", "off", "mode", "add", "del"] and not is_admin:
+        await update.effective_message.reply_text("⛔ Hanya Admin Grup yang berhak mengubah pengaturan Satpam Grup.")
+        return
+
+    cfg = await database.get_satpam_settings(chat_id)
+    enabled = cfg.get("enabled", False)
+    mode = cfg.get("mode", "admin_only")
+
+    if subcommand in ["status", "info"]:
+        whitelists = await database.get_whitelist_domains(chat_id)
+        wl_str = ", ".join([f"`{d}`" for d in whitelists]) if whitelists else "_Belum ada_"
+        status_str = "🟢 *AKTIF*" if enabled else "🔴 *NON-AKTIF*"
+        mode_str = "*Hanya Admin*" if mode == "admin_only" else "*Admin + Whitelist*"
+        
+        text = (
+            "🛡 *STATUS SATPAM GRUP:*\n\n"
+            f"• Status Satpam: {status_str}\n"
+            f"• Mode Filter: {mode_str}\n"
+            f"• Domain Whitelist: {wl_str}\n\n"
+            "⚙️ *PERINTAH SATPAM (Admin Only):*\n"
+            "• `/satpam on` — Aktifkan Satpam Grup\n"
+            "• `/satpam off` — Matikan Satpam Grup\n"
+            "• `/satpam mode admin` — Hanya link Admin yang boleh\n"
+            "• `/satpam mode whitelist` — Link Admin & Whitelist boleh\n"
+            "• `/satpam add <domain>` — Tambah domain (misal: `github.com`)\n"
+            "• `/satpam del <domain>` — Hapus domain dari whitelist\n"
+            "• `/satpam list` — Lihat daftar whitelist domain"
+        )
+        await update.effective_message.reply_text(text, parse_mode=constants.ParseMode.MARKDOWN)
+        return
+
+    elif subcommand == "on":
+        await database.set_satpam_settings(chat_id, enabled=True, mode=mode)
+        await update.effective_message.reply_text("🟢 *Satpam Grup berhasil DIAKTIFKAN!* Pesan berisi link dari non-admin akan otomatis dihapus.", parse_mode=constants.ParseMode.MARKDOWN)
+
+    elif subcommand == "off":
+        await database.set_satpam_settings(chat_id, enabled=False, mode=mode)
+        await update.effective_message.reply_text("🔴 *Satpam Grup telah DIMATIKAN.* Anggota biasa bebas mengirim link.", parse_mode=constants.ParseMode.MARKDOWN)
+
+    elif subcommand == "mode":
+        if len(args) < 2 or args[1].lower() not in ["admin", "whitelist"]:
+            await update.effective_message.reply_text("⚠️ Pilih mode yang valid: `/satpam mode admin` atau `/satpam mode whitelist`.", parse_mode=constants.ParseMode.MARKDOWN)
+            return
+        new_mode = "admin_only" if args[1].lower() == "admin" else "whitelist"
+        await database.set_satpam_settings(chat_id, enabled=enabled, mode=new_mode)
+        mode_label = "Hanya Link Admin" if new_mode == "admin_only" else "Link Admin & Whitelist Domain"
+        await update.effective_message.reply_text(f"⚙️ *Mode Satpam diubah menjadi:* {mode_label}", parse_mode=constants.ParseMode.MARKDOWN)
+
+    elif subcommand == "add":
+        if len(args) < 2:
+            await update.effective_message.reply_text("⚠️ Masukkan domain yang ingin ditambah. Contoh: `/satpam add github.com`", parse_mode=constants.ParseMode.MARKDOWN)
+            return
+        domain = args[1]
+        success = await database.add_whitelist_domain(chat_id, domain)
+        if success:
+            await update.effective_message.reply_text(f"✅ Domain `{domain}` berhasil ditambahkan ke Whitelist!", parse_mode=constants.ParseMode.MARKDOWN)
+        else:
+            await update.effective_message.reply_text(f"ℹ️ Domain `{domain}` sudah ada di whitelist atau format tidak valid.", parse_mode=constants.ParseMode.MARKDOWN)
+
+    elif subcommand == "del":
+        if len(args) < 2:
+            await update.effective_message.reply_text("⚠️ Masukkan domain yang ingin dihapus. Contoh: `/satpam del github.com`", parse_mode=constants.ParseMode.MARKDOWN)
+            return
+        domain = args[1]
+        removed = await database.remove_whitelist_domain(chat_id, domain)
+        if removed:
+            await update.effective_message.reply_text(f"🗑 Domain `{domain}` berhasil dihapus dari Whitelist.", parse_mode=constants.ParseMode.MARKDOWN)
+        else:
+            await update.effective_message.reply_text(f"⚠️ Domain `{domain}` tidak ditemukan di daftar Whitelist.", parse_mode=constants.ParseMode.MARKDOWN)
+
+    elif subcommand == "list":
+        whitelists = await database.get_whitelist_domains(chat_id)
+        if not whitelists:
+            await update.effective_message.reply_text("📋 Whitelist domain grup ini masih kosong.")
+            return
+        wl_lines = [f"• `{d}`" for d in whitelists]
+        await update.effective_message.reply_text("📋 *DAFTAR DOMAIN WHITELIST:*\n" + "\n".join(wl_lines), parse_mode=constants.ParseMode.MARKDOWN)
+
+    else:
+        await update.effective_message.reply_text("⚠️ Subcommand tidak dikenal. Ketik `/satpam` untuk melihat status dan petunjuk.", parse_mode=constants.ParseMode.MARKDOWN)
+
 async def cleanup_job_callback(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Job harian untuk membersihkan chat yang lebih dari 30 hari."""
     deleted = await database.cleanup_old_messages(days=30)
@@ -621,7 +859,7 @@ def main() -> None:
         logger.error("Konfigurasi tidak lengkap: %s", err_msg)
         print(f"\n[ERROR] {err_msg}")
         print("Pastikan Anda telah menyalin .env.example menjadi .env dan mengisi API token yang sesuai.\n")
-        return
+        raise SystemExit(1)
 
     if config.AI_PROVIDER == "gemini":
         active_model = config.GEMINI_MODEL
@@ -639,6 +877,7 @@ def main() -> None:
     # Daftarkan handler perintah
     app.add_handler(CommandHandler(["start", "help"], start_command))
     app.add_handler(CommandHandler("summary", summary_command))
+    app.add_handler(CommandHandler("satpam", satpam_command))
     app.add_handler(CommandHandler(["grup", "groups"], grup_command))
     app.add_handler(CommandHandler(["model", "models"], model_command))
     app.add_handler(CommandHandler("schedule", schedule_command))
@@ -646,6 +885,7 @@ def main() -> None:
 
     # Daftarkan handler pesan teks untuk logging histori
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), message_logger))
+
 
     # Jalankan polling bot dengan retries otomatis jika ada masalah jaringan sementara
     app.run_polling(bootstrap_retries=-1, drop_pending_updates=False)

@@ -16,11 +16,16 @@ AI Agent autonomous berbasis Telegram yang membaca riwayat obrolan grup dan memb
 2. **On-Demand Summary (`/summary`)**:
    - `/summary` — Meringkas obrolan sejak ringkasan terakhir (atau 24 jam terakhir secara *default*).
    - `/summary 6h` / `/summary 2d` — Meringkas obrolan dalam rentang waktu tertentu.
-3. **Ringkasan Terjadwal (`/schedule <jam>`)**:
+3. **Satpam Grup / Anti-Spam Link Guard (`/satpam`)**:
+   - Proteksi otomatis grup dari kiriman link/URL anomali atau tidak dikenal oleh anggota biasa.
+   - **Mode Admin Only**: Hanya pengirim bernon-admin yang link-nya diblokir dan dihapus secara otomatis.
+   - **Mode Whitelist**: Mengizinkan link dari Admin + link dari domain resmi yang di-whitelist (misal: `github.com`, `google.com`).
+   - Peringatan instan yang otomatis menghapus diri sendiri (*self-destruct*) agar grup tetap rapi.
+4. **Ringkasan Terjadwal (`/schedule <jam>`)**:
    - Contoh: `/schedule 4` — Bot akan mengirimkan ringkasan berkala setiap 4 jam secara otomatis ke grup.
    - `/unschedule` — Menonaktifkan jadwal otomatis.
-4. **Hierarchical / Map-Reduce Chunking**: Mampu menangani volume chat tinggi (ratusan hingga ribuan pesan) tanpa batasan token context LLM.
-5. **Auto-Cleanup**: Pembersihan otomatis pesan lama di atas 30 hari untuk menjaga database tetap ringan.
+5. **Hierarchical / Map-Reduce Chunking**: Mampu menangani volume chat tinggi (ratusan hingga ribuan pesan) tanpa batasan token context LLM.
+6. **Auto-Cleanup**: Pembersihan otomatis pesan lama di atas 30 hari untuk menjaga database tetap ringan.
 
 ---
 

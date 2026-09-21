@@ -1,0 +1,10 @@
+.env
+.env.*
+*.session
+*.session-journal
+chat_history.db
+__pycache__/
+*.pyc
+node_modules/
+.git/
+.gitignore
