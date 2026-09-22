@@ -14,11 +14,12 @@ def _ipv4_only_getaddrinfo(*args, **kwargs):
     return ipv4_results if ipv4_results else results
 socket.getaddrinfo = _ipv4_only_getaddrinfo
 
-from telegram import Update, constants
+from telegram import Update, constants, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
+    CallbackQueryHandler,
     ContextTypes,
     filters
 )
@@ -147,45 +148,207 @@ async def private_userbot_ready() -> bool:
         return False
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handler untuk perintah /start dan /help."""
+    """Handler untuk perintah /start - Menampilkan pesan onboarding & tombol menu cepat."""
     if config.AI_PROVIDER == "gemini":
-        ai_name = f"Google Gemini AI ({config.GEMINI_MODEL})"
+        ai_name = f"Google Gemini ({config.GEMINI_MODEL})"
     elif config.AI_PROVIDER == "anthropic":
         ai_name = f"Claude ({config.ANTHROPIC_MODEL})"
     else:
         ai_name = f"Nous-Hermes ({config.HERMES_MODEL})"
 
-    text = (
-        "👋 *Halo! Saya adalah Telegram AI Assistant, Group Satpam & Summarizer Bot (@Nier_12bot).*\n\n"
-        f"Saya siap membantu Anda menjawab pertanyaan, mengobrol (*interactive chat*), "
-        f"menjaga keamanan grup dari link terlarang (*Satpam Grup*), "
-        f"dan merangkum obrolan grup secara otomatis bertenaga AI (*{ai_name}*).\n\n"
-        "📌 *FITUR UTAMA:*\n"
-        "• *Chat Interaktif*: Kirim pesan langsung di DM untuk bertanya atau berdiskusi dengan AI!\n"
-        "• *Ringkasan Grup*: Merangkum topik, keputusan, action items (PIC), dan link penting di grup Telegram.\n"
-        "• *Satpam Grup*: Melarang link anomali/terlarang dari anggota biasa. Hanya Admin atau Domain Whitelist yang diizinkan!\n"
-        "• *Check Kuota AI & List Grup*: Pantau status model AI, sisa kuota (%), dan grup yang dipantau.\n"
-        "• *Ringkasan Terjadwal*: Mengirimkan ringkasan berkala secara otomatis di grup.\n\n"
-        "🛠 *DAFTAR PERINTAH LENGKAP:*\n"
-        "• `/summary` — Meringkas chat grup sejak ringkasan terakhir (atau 24 jam terakhir).\n"
-        "• `/summary 3h` — Meringkas pesan 3 jam terakhir (bisa juga `6h`, `12h`, `2d`, dll).\n"
-        "• `/satpam` — Pengaturan Satpam Grup (`/satpam on|off`, `/satpam mode admin|whitelist`, `/satpam add <domain>`, `/satpam list`).\n"
-        "• `/grup` atau `/groups` — Menampilkan daftar grup Telegram yang dipantau bot.\n"
-        "• `/model` — Cek status provider AI aktif, sisa kuota (%), atau ganti model (`/model hermes`, `/model gemini`, `/model claude`).\n"
-        "• `/schedule <jam>` — Aktifkan ringkasan terjadwal tiap X jam (contoh: `/schedule 6`).\n"
-        "• `/unschedule` — Matikan ringkasan terjadwal di grup ini.\n"
-        "• `/help` — Menampilkan pesan panduan lengkap ini.\n\n"
-        "💡 *Tips Chat:* Di chat grup, sebut nama bot (`@username`) atau reply pesan bot untuk bertanya langsung!"
-    )
+    bot_user = context.bot.username or "Nier_12bot"
+    add_to_group_url = f"https://t.me/{bot_user}?startgroup=true"
+
+    is_group = update.effective_chat and update.effective_chat.type in [constants.ChatType.GROUP, constants.ChatType.SUPERGROUP]
+
+    if is_group:
+        text = (
+            "👋 *Halo Anggota Grup! Saya Telegram AI Agent Suite Ready!*\n\n"
+            f"⚡ *AI Engine Aktif:* `{ai_name}`\n\n"
+            "Saya bertugas otomatis merangkum obrolan grup & memproteksi dari spam link.\n\n"
+            "🚀 *Langkah Cepat di Grup ini:*\n"
+            "1️⃣ Ketik `/summary` untuk merangkum obrolan grup instan.\n"
+            "2️⃣ Ketik `/satpam` untuk melihat status Anti-Spam Link Guard.\n"
+            "3️⃣ Ketik `/help` untuk petunjuk lengkap semua fitur."
+        )
+        keyboard = [
+            [
+                InlineKeyboardButton("⚡ Ringkas Sekarang", callback_data="help_summary"),
+                InlineKeyboardButton("🛡️ Status Satpam", callback_data="help_satpam")
+            ],
+            [
+                InlineKeyboardButton("📖 Panduan Lengkap", callback_data="help_main")
+            ]
+        ]
+    else:
+        text = (
+            "🚀 *Selamat Datang di Telegram AI Agent & Summarizer Suite!*\n\n"
+            f"🤖 *AI Engine Aktif:* `{ai_name}`\n\n"
+            "Saya adalah asisten cerdas yang memantau obrolan grup, merangkum poin penting (Topik, Keputusan, PIC, Action Items), dan memproteksi grup dari link phishing/spam.\n\n"
+            "👇 *3 Langkah Mudah Memulai:*\n"
+            "1️⃣ *Tambahkan Bot*: Klik tombol *[➕ Tambahkan ke Grup]* di bawah.\n"
+            "2️⃣ *Jadikan Admin*: Berikan izin admin agar bot bisa membaca pesan & memproteksi grup.\n"
+            "3️⃣ *Gunakan Command*: Ketik `/summary` di grup untuk melihat hasil ringkasan AI!\n\n"
+            "💡 *Tips:* Di Chat Pribadi (DM) ini, Anda juga bisa langsung chat/tanya jawab apapun dengan AI!"
+        )
+        keyboard = [
+            [
+                InlineKeyboardButton("➕ Tambahkan ke Grup", url=add_to_group_url),
+                InlineKeyboardButton("📖 Panduan /help", callback_data="help_main")
+            ],
+            [
+                InlineKeyboardButton("⚡ Ringkasan", callback_data="help_summary"),
+                InlineKeyboardButton("🛡️ Satpam Link Guard", callback_data="help_satpam")
+            ],
+            [
+                InlineKeyboardButton("📅 Penjadwalan", callback_data="help_schedule"),
+                InlineKeyboardButton("🤖 Provider AI", callback_data="help_model")
+            ]
+        ]
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
     if update.effective_message:
         try:
             await update.effective_message.reply_text(
                 text,
-                parse_mode=constants.ParseMode.MARKDOWN
+                parse_mode=constants.ParseMode.MARKDOWN,
+                reply_markup=reply_markup
             )
         except Exception as e:
-            logger.warning("Markdown reply_text failed: %s", e)
-            await update.effective_message.reply_text(text)
+            logger.warning("Markdown reply_text failed in start_command: %s", e)
+            await update.effective_message.reply_text(text, reply_markup=reply_markup)
+
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handler untuk perintah /help - Manual lengkap & menu kategori interaktif."""
+    text, reply_markup = get_help_content("main")
+
+    if update.effective_message:
+        try:
+            await update.effective_message.reply_text(
+                text,
+                parse_mode=constants.ParseMode.MARKDOWN,
+                reply_markup=reply_markup
+            )
+        except Exception as e:
+            logger.warning("Markdown reply_text failed in help_command: %s", e)
+            await update.effective_message.reply_text(text, reply_markup=reply_markup)
+
+
+def get_help_content(category: str = "main") -> tuple[str, InlineKeyboardMarkup]:
+    """Helper untuk menghasilkan teks panduan dan tombol interaktif berdasarkan kategori."""
+
+    if category == "summary":
+        text = (
+            "⚡ *PANDUAN FITUR RINGKASAN AI (/summary)*\n\n"
+            "Bot merangkum riwayat percakapan grup menggunakan teknik *Map-Reduce Chunking* "
+            "sehingga sanggup memproses ribuan pesan tanpa batas token.\n\n"
+            "📌 *Perintah & Format Waktu:*\n"
+            "• `/summary` — Meringkas chat sejak jam ringkasan terakhir (default: 24 jam terakhir).\n"
+            "• `/summary 3h` — Meringkas obrolan 3 jam terakhir.\n"
+            "• `/summary 12h` — Meringkas obrolan 12 jam terakhir.\n"
+            "• `/summary 2d` — Meringkas obrolan 2 hari terakhir.\n\n"
+            "📊 *Output Ringkasan Terdiri Dari:*\n"
+            "1. 🎯 *Topik Utama Diskusi*\n"
+            "2. 💡 *Keputusan Poin Penting*\n"
+            "3. 📋 *Action Items & Person In Charge (PIC)*\n"
+            "4. 🔗 *Link/Dokumen Terlampir*"
+        )
+    elif category == "satpam":
+        text = (
+            "🛡️ *PANDUAN SATPAM ANTI-SPAM LINK GUARD (/satpam)*\n\n"
+            "Fitur ini memproteksi grup dari penyebaran link phishing/anomali oleh akun anggota biasa.\n\n"
+            "📌 *Perintah Pengaturan Admin Grup:*\n"
+            "• `/satpam` — Cek status proteksi dan daftar domain whitelist saat ini.\n"
+            "• `/satpam on` / `/satpam off` — Mengaktifkan atau mematikan fitur Satpam.\n"
+            "• `/satpam mode admin` — Hanya Admin grup yang boleh kirim link (link user biasa dihapus).\n"
+            "• `/satpam mode whitelist` — Mengizinkan link dari domain tepercaya (misal github.com, google.com).\n"
+            "• `/satpam add <domain>` — Menambah domain ke Whitelist (contoh: `/satpam add github.com`).\n"
+            "• `/satpam remove <domain>` — Menghapus domain dari Whitelist.\n"
+            "• `/satpam list` — Menampilkan daftar seluruh domain terverifikasi."
+        )
+    elif category == "schedule":
+        text = (
+            "📅 *PANDUAN RINGKASAN TERJADWAL (/schedule)*\n\n"
+            "Bot dapat mengirimkan laporan ringkasan berkala secara otomatis ke grup tanpa harus diketik manual.\n\n"
+            "📌 *Perintah Penjadwalan:*\n"
+            "• `/schedule <jam>` — Aktifkan ringkasan otomatis setiap X jam.\n"
+            "  *Contoh:* `/schedule 4` (bot akan mengirim ringkasan setiap 4 jam sekali).\n"
+            "  *Contoh:* `/schedule 12` (bot mengirim ringkasan 2 kali sehari).\n"
+            "• `/unschedule` — Mematikan jadwal ringkasan otomatis di grup ini."
+        )
+    elif category == "model":
+        text = (
+            "🤖 *PANDUAN MODEL AI & MONITORING (/model & /grup)*\n\n"
+            "Mendukung multi-provider AI (Google Gemini, Anthropic Claude, Nous-Hermes).\n\n"
+            "📌 *Perintah AI & Status:*\n"
+            "• `/model` — Cek provider AI aktif, estimasi sisa kuota (%), dan batas rate limit.\n"
+            "• `/model gemini` — Ganti engine ke Google Gemini 3.6 Flash (Gratis & Cepat).\n"
+            "• `/model claude` — Ganti engine ke Anthropic Claude 3.5 Sonnet.\n"
+            "• `/model hermes` — Ganti engine ke Nous-Hermes (OpenRouter/Ollama).\n"
+            "• `/grup` atau `/groups` — Menampilkan daftar grup Telegram yang dipantau oleh bot."
+        )
+    else:  # main
+        if config.AI_PROVIDER == "gemini":
+            ai_name = f"Google Gemini ({config.GEMINI_MODEL})"
+        elif config.AI_PROVIDER == "anthropic":
+            ai_name = f"Claude ({config.ANTHROPIC_MODEL})"
+        else:
+            ai_name = f"Nous-Hermes ({config.HERMES_MODEL})"
+
+        text = (
+            "🛠 *MANUAL PERINTAH TELEGRAM AI BOT*\n\n"
+            f"⚙️ *Engine Aktif:* `{ai_name}`\n\n"
+            "📋 *RINGKASAN PERINTAH CEPAT:*\n"
+            "• `/summary [waktu]` — Rangkum obrolan grup (contoh: `/summary 6h`).\n"
+            "• `/satpam [opsi]` — Satpam Anti-Spam Link (contoh: `/satpam on`).\n"
+            "• `/schedule <jam>` — Ringkasan terjadwal otomatis (contoh: `/schedule 4`).\n"
+            "• `/model [provider]` — Cek/ganti AI model (`gemini`, `claude`, `hermes`).\n"
+            "• `/grup` — Lihat daftar grup yang dipantau bot.\n\n"
+            "👇 *Klik tombol di bawah untuk panduan detail per modul:*"
+        )
+
+    keyboard = [
+        [
+            InlineKeyboardButton("⚡ Ringkasan", callback_data="help_summary"),
+            InlineKeyboardButton("🛡️ Satpam Guard", callback_data="help_satpam")
+        ],
+        [
+            InlineKeyboardButton("📅 Penjadwalan", callback_data="help_schedule"),
+            InlineKeyboardButton("🤖 Model AI", callback_data="help_model")
+        ]
+    ]
+
+    if category != "main":
+        keyboard.append([InlineKeyboardButton("🔙 Kembali ke Menu Utama", callback_data="help_main")])
+
+    return text, InlineKeyboardMarkup(keyboard)
+
+
+async def help_button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Callback query handler untuk tombol inline menu /help dan /start."""
+    query = update.callback_query
+    if not query:
+        return
+
+    await query.answer()
+
+    data = query.data or ""
+    if not data.startswith("help_"):
+        return
+
+    category = data.replace("help_", "")
+    text, reply_markup = get_help_content(category)
+
+    try:
+        await query.edit_message_text(
+            text=text,
+            parse_mode=constants.ParseMode.MARKDOWN,
+            reply_markup=reply_markup
+        )
+    except Exception as e:
+        logger.debug("Failed to edit help message text: %s", e)
 
 async def message_logger(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Menyimpan pesan ke DB dan membalas obrolan secara interaktif (DM atau saat di-mention/reply di grup)."""
@@ -875,7 +1038,9 @@ def main() -> None:
     app.add_error_handler(error_handler)
 
     # Daftarkan handler perintah
-    app.add_handler(CommandHandler(["start", "help"], start_command))
+    app.add_handler(CommandHandler("start", start_command))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CallbackQueryHandler(help_button_callback))
     app.add_handler(CommandHandler("summary", summary_command))
     app.add_handler(CommandHandler("satpam", satpam_command))
     app.add_handler(CommandHandler(["grup", "groups"], grup_command))
