@@ -386,9 +386,9 @@ async def start_single_userbot(session_str: str, account_index: int = 1, total_a
         dest = event.chat_id if event.chat_id else "me"
 
         # ---------------------------------------------------------
-        # Perintah .model / /model: Cek Kuota % & Ganti Model AI
+        # Perintah .model: Cek Kuota % & Ganti Model AI (khusus UserBot)
         # ---------------------------------------------------------
-        if text.startswith(".model") or text.startswith("/model"):
+        if text.startswith(".model"):
             parts = text.split(maxsplit=1)
             if len(parts) == 1:
                 cur_prov = config.AI_PROVIDER.upper()
@@ -433,9 +433,9 @@ async def start_single_userbot(session_str: str, account_index: int = 1, total_a
             return
 
         # ---------------------------------------------------------
-        # Perintah .grup / /grup
+        # Perintah .grup / .groups
         # ---------------------------------------------------------
-        if text.startswith(".grup") or text.startswith("/grup") or text.startswith(".groups") or text.startswith("/groups"):
+        if text.startswith(".grup") or text.startswith(".groups"):
             msg_lines = [f"Berikut daftar grup Telegram yang kamu ikuti, {user_name}:\n"]
             async for dialog in client.iter_dialogs():
                 if dialog.is_group or dialog.is_channel:
@@ -446,10 +446,10 @@ async def start_single_userbot(session_str: str, account_index: int = 1, total_a
             return
 
         # ---------------------------------------------------------
-        # Perintah .sum / .rangkum / /rangkum / /summarize
+        # Perintah .sum / .rangkum / .summarize
         # ---------------------------------------------------------
         is_sum_cmd = False
-        for cmd in [".sum", "/sum", ".rangkum", "/rangkum", ".summarize", "/summarize"]:
+        for cmd in [".sum", ".rangkum", ".summarize"]:
             if text.startswith(cmd):
                 is_sum_cmd = True
                 break

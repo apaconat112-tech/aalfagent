@@ -755,7 +755,14 @@ async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if context.args:
         arg = context.args[0].lower()
         if arg in ["gemini", "hermes", "claude", "anthropic"]:
-            target_prov = "anthropic" if arg == "claude" else arg
+            target_prov = "anthropic" if arg in ["claude", "anthropic"] else arg
+            if target_prov == "anthropic" and not config.ANTHROPIC_API_KEY:
+                await update.effective_message.reply_text(
+                    "⚠️ *Gagal mengubah ke Claude!* `ANTHROPIC_API_KEY` belum diisi di file `.env`.\n"
+                    "Silakan isi API Key Claude terlebih dahulu atau gunakan `/model gemini` / `/model hermes`.",
+                    parse_mode=constants.ParseMode.MARKDOWN
+                )
+                return
             config.AI_PROVIDER = target_prov
             mod_name = config.HERMES_MODEL if target_prov == "hermes" else (config.GEMINI_MODEL if target_prov == "gemini" else config.ANTHROPIC_MODEL)
             await update.effective_message.reply_text(
