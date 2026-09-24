@@ -49,7 +49,9 @@ AI_PROVIDER = _RUNTIME_AI_PROVIDER
 
 # Konfigurasi Google Gemini (GRATIS di https://aistudio.google.com/)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash").strip()
+_raw_gemini_model = os.getenv("GEMINI_MODEL", "gemini-3.6-flash").strip()
+_RUNTIME_GEMINI_MODEL = "gemini-3.6-flash" if _raw_gemini_model in ["", "gemini-3.5-flash"] else _raw_gemini_model
+GEMINI_MODEL = _RUNTIME_GEMINI_MODEL
 
 # Konfigurasi OpenAI GPT
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
@@ -91,11 +93,17 @@ def reload_config():
     global TELEGRAM_BOT_TOKEN, TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_STRING_SESSION
     global AI_PROVIDER, GEMINI_API_KEY, GEMINI_MODEL, OPENAI_API_KEY, OPENAI_MODEL
     global ANTHROPIC_API_KEY, ANTHROPIC_MODEL, HERMES_API_KEY, HERMES_MODEL, HERMES_BASE_URL
-    global _RUNTIME_AI_PROVIDER
+    global _RUNTIME_AI_PROVIDER, _RUNTIME_GEMINI_MODEL
     
     TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
-    GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash").strip()
+    
+    if _RUNTIME_GEMINI_MODEL:
+        GEMINI_MODEL = _RUNTIME_GEMINI_MODEL
+    else:
+        _raw_g = os.getenv("GEMINI_MODEL", "gemini-3.6-flash").strip()
+        GEMINI_MODEL = "gemini-3.6-flash" if _raw_g in ["", "gemini-3.5-flash"] else _raw_g
+
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
     OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
     OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").strip()
@@ -114,11 +122,13 @@ def reload_config():
 
 def save_env_key(key: str, value: str) -> bool:
     """Simpan/perbarui variabel di file .env & memori runtime secara otomatis agar perubahan permanen."""
-    global _RUNTIME_AI_PROVIDER
+    global _RUNTIME_AI_PROVIDER, _RUNTIME_GEMINI_MODEL
     try:
         os.environ[key] = value
         if key == "AI_PROVIDER":
             _RUNTIME_AI_PROVIDER = value.strip().lower()
+        elif key == "GEMINI_MODEL":
+            _RUNTIME_GEMINI_MODEL = value.strip()
 
         if env_path.exists():
             with open(env_path, "r", encoding="utf-8") as f:

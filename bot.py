@@ -989,14 +989,18 @@ async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     
     if context.args:
         arg = context.args[0].lower()
-        valid_args = ["gemini", "hermes", "claude", "anthropic", "openai", "gpt", "gpt4", "gpt-4o", "gpt-4o-mini"]
-        if arg in valid_args:
+        valid_args = ["gemini", "gemini-3.6", "gemini-3.6-flash", "hermes", "claude", "anthropic", "openai", "gpt", "gpt4", "gpt-4o", "gpt-4o-mini"]
+        if arg in valid_args or arg.startswith("gemini"):
             if arg in ["openai", "gpt", "gpt4", "gpt-4o", "gpt-4o-mini"]:
                 target_prov = "openai"
                 if arg in ["gpt-4o", "gpt-4o-mini"]:
                     config.OPENAI_MODEL = arg
             elif arg in ["claude", "anthropic"]:
                 target_prov = "anthropic"
+            elif arg.startswith("gemini"):
+                target_prov = "gemini"
+                config.GEMINI_MODEL = "gemini-3.6-flash"
+                config.save_env_key("GEMINI_MODEL", "gemini-3.6-flash")
             else:
                 target_prov = arg
 
