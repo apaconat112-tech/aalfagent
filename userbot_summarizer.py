@@ -594,7 +594,21 @@ async def start_single_userbot(session_str: str, account_index: int = 1, total_a
             logger.exception("Error executing .sum command: %s", cmd_err)
             await client.send_message(dest, f"❌ Terjadi kesalahan saat merangkum: {str(cmd_err)}")
 
-    await client.run_until_disconnected()
+    from telethon.errors import AuthKeyDuplicatedError
+    try:
+        await client.run_until_disconnected()
+    except AuthKeyDuplicatedError:
+        logger.warning(
+            "⚠️ Userbot [%d/%d] terputus (AuthKeyDuplicatedError): String Session Telegram ini sedang dipakai di tempat lain secara bersamaan.",
+            account_index, total_accounts
+        )
+    except Exception as e:
+        logger.warning("Userbot [%d/%d] listener terhenti: %s", account_index, total_accounts, e)
+    finally:
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
 
 async def run_saved_messages_listener() -> None:
     """Mode Listener Multi-Account: Mendengarkan perintah dari seluruh akun Telegram yang dikonfigurasi."""
