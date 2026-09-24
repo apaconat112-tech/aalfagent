@@ -112,23 +112,23 @@ flowchart TD
         AI_Hermes["🟢 Nous-Hermes (OpenRouter / Ollama)"]
     end
 
-    Bot_Sim -->|Inject Simulasi Pesan| TG_Group
-    TG_Group -->|Validasi URL / Link| Satpam
-    TG_Group -->|Pesan Masuk (Real-Time)| Bot_Core
-    TG_Group -->|BACA Silent Chat (MTProto)| UserBot_Core
+    Bot_Sim -->|"Inject Simulasi Pesan"| TG_Group
+    TG_Group -->|"Validasi URL Link"| Satpam
+    TG_Group -->|"Pesan Masuk Real Time"| Bot_Core
+    TG_Group -->|"Baca Silent Chat MTProto"| UserBot_Core
 
-    Bot_Core -->|Simpan Chat History| Async_DB
-    Bot_Core -->|Pemicu Summary Manual / Schedule| Chunk_Engine
-    UserBot_Core -->|Pemicu Summary Rahasia| Chunk_Engine
+    Bot_Core -->|"Simpan Chat History"| Async_DB
+    Bot_Core -->|"Pemicu Summary Manual / Schedule"| Chunk_Engine
+    UserBot_Core -->|"Pemicu Summary Rahasia"| Chunk_Engine
 
-    Chunk_Engine -->|Ambil Riwayat Chat| Async_DB
-    Chunk_Engine -->|Kirim Batch Transkrip| AI_Gemini
-    Chunk_Engine -->|Kirim Batch Transkrip| AI_OpenAI
-    Chunk_Engine -->|Kirim Batch Transkrip| AI_Claude
-    Chunk_Engine -->|Kirim Batch Transkrip| AI_Hermes
+    Chunk_Engine -->|"Ambil Riwayat Chat"| Async_DB
+    Chunk_Engine -->|"Kirim Batch Transkrip"| AI_Gemini
+    Chunk_Engine -->|"Kirim Batch Transkrip"| AI_OpenAI
+    Chunk_Engine -->|"Kirim Batch Transkrip"| AI_Claude
+    Chunk_Engine -->|"Kirim Batch Transkrip"| AI_Hermes
 
-    Chunk_Engine -->|Kirim Executive Recap| TG_Group
-    Chunk_Engine -->|Kirim Executive Recap Rahasia| TG_User
+    Chunk_Engine -->|"Kirim Executive Recap"| TG_Group
+    Chunk_Engine -->|"Kirim Executive Recap Rahasia"| TG_User
 ```
 
 ---
