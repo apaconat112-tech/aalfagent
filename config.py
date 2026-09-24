@@ -43,12 +43,17 @@ SIMULATOR_BOT_TOKENS = [t.strip() for t in SIMULATOR_BOT_TOKENS_RAW.split(",") i
 if not SIMULATOR_BOT_TOKENS and TELEGRAM_BOT_TOKEN:
     SIMULATOR_BOT_TOKENS = [TELEGRAM_BOT_TOKEN]
 
-# Provider AI: "gemini" (Gratis), "anthropic" (Claude), atau "hermes" (Nous-Hermes via OpenRouter/Ollama)
+# Provider AI: "gemini" (Gratis), "openai" (GPT-4o/mini), "anthropic" (Claude), atau "hermes" (Nous-Hermes via OpenRouter/Ollama)
 AI_PROVIDER = os.getenv("AI_PROVIDER", "gemini").strip().lower()
 
 # Konfigurasi Google Gemini (GRATIS di https://aistudio.google.com/)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash").strip()
+
+# Konfigurasi OpenAI GPT
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").strip()
 
 # Konfigurasi Anthropic Claude
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
@@ -59,15 +64,21 @@ HERMES_API_KEY = os.getenv("HERMES_API_KEY", "").strip()
 HERMES_MODEL = os.getenv("HERMES_MODEL", "nousresearch/hermes-3-llama-3.1-8b:free").strip()
 HERMES_BASE_URL = os.getenv("HERMES_BASE_URL", "https://openrouter.ai/api/v1").strip()
 
+# Normalisasi alias provider
+if AI_PROVIDER in ["gpt", "chatgpt", "openai"]:
+    AI_PROVIDER = "openai"
+
 # Penyesuaian provider otomatis jika hanya satu key yang diisi dan AI_PROVIDER belum spesifik
-if AI_PROVIDER not in ["gemini", "anthropic", "hermes"]:
+if AI_PROVIDER not in ["gemini", "openai", "anthropic", "hermes"]:
     AI_PROVIDER = "gemini"
 
-if HERMES_API_KEY and not GEMINI_API_KEY and not ANTHROPIC_API_KEY:
+if OPENAI_API_KEY and not GEMINI_API_KEY and not ANTHROPIC_API_KEY and not HERMES_API_KEY:
+    AI_PROVIDER = "openai"
+elif HERMES_API_KEY and not GEMINI_API_KEY and not ANTHROPIC_API_KEY and not OPENAI_API_KEY:
     AI_PROVIDER = "hermes"
-elif GEMINI_API_KEY and not ANTHROPIC_API_KEY and not HERMES_API_KEY and AI_PROVIDER != "hermes":
+elif GEMINI_API_KEY and not ANTHROPIC_API_KEY and not HERMES_API_KEY and not OPENAI_API_KEY and AI_PROVIDER != "hermes":
     AI_PROVIDER = "gemini"
-elif ANTHROPIC_API_KEY and not GEMINI_API_KEY and not HERMES_API_KEY and AI_PROVIDER != "hermes":
+elif ANTHROPIC_API_KEY and not GEMINI_API_KEY and not HERMES_API_KEY and not OPENAI_API_KEY and AI_PROVIDER != "hermes":
     AI_PROVIDER = "anthropic"
 
 # Konfigurasi ringkasan dan database
@@ -76,6 +87,7 @@ _database_value = os.getenv("DATABASE_PATH", "chat_history.db").strip()
 DATABASE_PATH = str((PROJECT_ROOT / _database_value).resolve()) if not Path(_database_value).is_absolute() else _database_value
 MAX_MESSAGES_PER_CHUNK = int(os.getenv("MAX_MESSAGES_PER_CHUNK", "80"))
 FAST_SUMMARY_MAX_MESSAGES = int(os.getenv("FAST_SUMMARY_MAX_MESSAGES", "80"))
+MAX_USERBOT_MESSAGES = int(os.getenv("MAX_USERBOT_MESSAGES", "300"))
 
 def validate_config() -> tuple[bool, str]:
     """Validasi apakah environment variable utama sudah diisi."""
@@ -83,10 +95,13 @@ def validate_config() -> tuple[bool, str]:
         return False, "TELEGRAM_BOT_TOKEN belum diatur di file .env!"
     
     if AI_PROVIDER == "gemini" and not GEMINI_API_KEY:
-        if not ANTHROPIC_API_KEY and not HERMES_API_KEY:
+        if not ANTHROPIC_API_KEY and not HERMES_API_KEY and not OPENAI_API_KEY:
             return False, "GEMINI_API_KEY belum diatur di file .env! Dapatkan gratis di https://aistudio.google.com/"
+    elif AI_PROVIDER == "openai" and not OPENAI_API_KEY:
+        if not GEMINI_API_KEY and not ANTHROPIC_API_KEY and not HERMES_API_KEY:
+            return False, "OPENAI_API_KEY belum diatur di file .env!"
     elif AI_PROVIDER == "anthropic" and not ANTHROPIC_API_KEY:
-        if not GEMINI_API_KEY and not HERMES_API_KEY:
+        if not GEMINI_API_KEY and not HERMES_API_KEY and not OPENAI_API_KEY:
             return False, "ANTHROPIC_API_KEY belum diatur di file .env!"
     elif AI_PROVIDER == "hermes" and not HERMES_API_KEY:
         # Jika menggunakan endpoint lokal seperti Ollama (misal http://localhost:11434/v1), API key bisa opsional, tapi untuk OpenRouter wajib

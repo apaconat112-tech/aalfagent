@@ -340,7 +340,13 @@ async def check_all_quotas() -> str:
     else:
         lines.append("• *Google Gemini*: Key Belum Diisi")
 
-    # 3. Anthropic Claude
+    # 3. OpenAI GPT
+    if config.OPENAI_API_KEY:
+        lines.append(f"• *OpenAI GPT*: Aktif (`{config.OPENAI_MODEL}`)")
+    else:
+        lines.append("• *OpenAI GPT*: Key Belum Diisi")
+
+    # 4. Anthropic Claude
     if config.ANTHROPIC_API_KEY:
         lines.append(f"• *Anthropic Claude*: Aktif (`{config.ANTHROPIC_MODEL}`)")
     else:
@@ -392,7 +398,14 @@ async def start_single_userbot(session_str: str, account_index: int = 1, total_a
             parts = text.split(maxsplit=1)
             if len(parts) == 1:
                 cur_prov = config.AI_PROVIDER.upper()
-                cur_mod = config.HERMES_MODEL if config.AI_PROVIDER == "hermes" else (config.GEMINI_MODEL if config.AI_PROVIDER == "gemini" else config.ANTHROPIC_MODEL)
+                if config.AI_PROVIDER == "openai":
+                    cur_mod = config.OPENAI_MODEL
+                elif config.AI_PROVIDER == "hermes":
+                    cur_mod = config.HERMES_MODEL
+                elif config.AI_PROVIDER == "anthropic":
+                    cur_mod = config.ANTHROPIC_MODEL
+                else:
+                    cur_mod = config.GEMINI_MODEL
                 
                 quota_status = await check_all_quotas()
 
@@ -403,6 +416,7 @@ async def start_single_userbot(session_str: str, account_index: int = 1, total_a
                     f"• Model Aktif: `{cur_mod}`\n\n"
                     f"{quota_status}\n\n"
                     f"💡 *GANTI MODEL:* \n"
+                    f"• `.model gpt` — Ganti ke OpenAI GPT (gpt-4o-mini)\n"
                     f"• `.model gemini` — Ganti ke Google Gemini\n"
                     f"• `.model hermes` — Ganti ke OpenRouter Hermes\n"
                     f"• `.model claude` — Ganti ke Anthropic Claude\n"
@@ -412,7 +426,15 @@ async def start_single_userbot(session_str: str, account_index: int = 1, total_a
                 return
 
             param = parts[1].strip().lower()
-            if param == "gemini":
+            if param in ["gpt", "openai", "gpt4", "gpt-4o", "gpt-4o-mini"]:
+                if not config.OPENAI_API_KEY:
+                    await client.send_message(dest, f"Waduh {user_name}, `OPENAI_API_KEY` belum diisi di `.env` nih!", parse_mode="Markdown")
+                else:
+                    config.AI_PROVIDER = "openai"
+                    if param in ["gpt-4o", "gpt-4o-mini"]:
+                        config.OPENAI_MODEL = param
+                    await client.send_message(dest, f"Siap {user_name}! AI Provider telah diubah ke *OPENAI GPT* (`{config.OPENAI_MODEL}`).", parse_mode="Markdown")
+            elif param == "gemini":
                 config.AI_PROVIDER = "gemini"
                 await client.send_message(dest, f"Siap {user_name}! AI Provider telah diubah ke *GOOGLE GEMINI* (`{config.GEMINI_MODEL}`).", parse_mode="Markdown")
             elif param in ["hermes", "openrouter", "auto"]:

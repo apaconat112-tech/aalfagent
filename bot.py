@@ -2,6 +2,7 @@ import asyncio
 import logging
 import re
 import socket
+import sys
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 from urllib.parse import urlparse
@@ -281,9 +282,10 @@ def get_help_content(category: str = "main") -> tuple[str, InlineKeyboardMarkup]
     elif category == "model":
         text = (
             "🤖 *PANDUAN MODEL AI & MONITORING (/model & /grup)*\n\n"
-            "Mendukung multi-provider AI (Google Gemini, Anthropic Claude, Nous-Hermes).\n\n"
+            "Mendukung multi-provider AI (Google Gemini, OpenAI GPT, Anthropic Claude, Nous-Hermes).\n\n"
             "📌 *Perintah AI & Status:*\n"
             "• `/model` — Cek provider AI aktif, estimasi sisa kuota (%), dan batas rate limit.\n"
+            "• `/model gpt` atau `/model openai` — Ganti engine ke OpenAI GPT-4o / GPT-4o-mini.\n"
             "• `/model gemini` — Ganti engine ke Google Gemini 3.6 Flash (Gratis & Cepat).\n"
             "• `/model claude` — Ganti engine ke Anthropic Claude 3.5 Sonnet.\n"
             "• `/model hermes` — Ganti engine ke Nous-Hermes (OpenRouter/Ollama).\n"
@@ -292,6 +294,8 @@ def get_help_content(category: str = "main") -> tuple[str, InlineKeyboardMarkup]
     else:  # main
         if config.AI_PROVIDER == "gemini":
             ai_name = f"Google Gemini ({config.GEMINI_MODEL})"
+        elif config.AI_PROVIDER == "openai":
+            ai_name = f"OpenAI GPT ({config.OPENAI_MODEL})"
         elif config.AI_PROVIDER == "anthropic":
             ai_name = f"Claude ({config.ANTHROPIC_MODEL})"
         else:
@@ -304,7 +308,7 @@ def get_help_content(category: str = "main") -> tuple[str, InlineKeyboardMarkup]
             "• `/summary [waktu]` — Rangkum obrolan grup (contoh: `/summary 6h`).\n"
             "• `/satpam [opsi]` — Satpam Anti-Spam Link (contoh: `/satpam on`).\n"
             "• `/schedule <jam>` — Ringkasan terjadwal otomatis (contoh: `/schedule 4`).\n"
-            "• `/model [provider]` — Cek/ganti AI model (`gemini`, `claude`, `hermes`).\n"
+            "• `/model [provider]` — Cek/ganti AI model (`gpt`, `gemini`, `claude`, `hermes`).\n"
             "• `/grup` — Lihat daftar grup yang dipantau bot.\n\n"
             "👇 *Klik tombol di bawah untuk panduan detail per modul:*"
         )
@@ -626,12 +630,18 @@ async def perform_private_userbot_summary(update: Update, context: ContextTypes.
             cutoff = (now_utc - timeframe_delta) if timeframe_delta else None
 
             formatted_messages = []
-            async for msg in client.iter_messages(target_entity, limit=1000):
+            max_limit = getattr(config, "MAX_USERBOT_MESSAGES", 300)
+            reached_limit = False
+
+            async for msg in client.iter_messages(target_entity, limit=max_limit):
                 if not msg.text or not msg.text.strip():
                     continue
                 msg_date = msg.date.astimezone(timezone.utc) if msg.date else now_utc
+                
+                # telethon iter_messages dari yang terbaru ke yang terlama
+                # Jika sudah melewati batas waktu (cutoff), hentikan pencarian lebih awal untuk hemat jaringan & token
                 if cutoff and msg_date < cutoff:
-                    continue
+                    break
 
                 sender = msg.sender or getattr(msg, "sender", None)
                 if isinstance(sender, User):
@@ -653,13 +663,23 @@ async def perform_private_userbot_summary(update: Update, context: ContextTypes.
                     "dt_obj": msg_date
                 })
 
+                if len(formatted_messages) >= max_limit:
+                    reached_limit = True
+                    break
+
             formatted_messages.reverse()
 
             if not formatted_messages:
                 await status_msg.edit_text(f"ℹ️ Belum ada pesan obrolan baru di grup *{group_title}*.", parse_mode=constants.ParseMode.MARKDOWN)
                 return
 
-            tf_info = f"{int(timeframe_delta.total_seconds() // 3600)} jam terakhir" if timeframe_delta else f"{len(formatted_messages)} pesan terbaru"
+            hours_num = int(timeframe_delta.total_seconds() // 3600) if timeframe_delta else 0
+            if timeframe_delta:
+                limit_note = f" (dibatasi {max_limit} pesan terbaru)" if reached_limit else ""
+                tf_info = f"{hours_num} jam terakhir{limit_note}"
+            else:
+                tf_info = f"{len(formatted_messages)} pesan terbaru"
+
             summary_result = await summarizer.summarize_messages(formatted_messages, timeframe_info=tf_info)
 
             try:
@@ -695,57 +715,268 @@ async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     delta = parse_timeframe_args(context.args) if context.args else None
     await perform_summary(chat_id, context, hours_delta=delta, reply_to_id=reply_to_id)
 
+# Timeframe options untuk pemilihan jam summary
+_TIMEFRAME_OPTIONS = [
+    ("1 Jam",   "1h"),
+    ("3 Jam",   "3h"),
+    ("6 Jam",   "6h"),
+    ("12 Jam",  "12h"),
+    ("24 Jam",  "24h"),
+    ("3 Hari",  "3d"),
+    ("7 Hari",  "7d"),
+]
+
+def _build_timeframe_keyboard(group_key: str) -> InlineKeyboardMarkup:
+    """Buat inline keyboard pilihan rentang waktu summary."""
+    # group_key = "idx:2" atau "cid:-1001234567"
+    row1 = [InlineKeyboardButton(f"⏱ {label}", callback_data=f"sumtime_{group_key}:{code}")
+            for label, code in _TIMEFRAME_OPTIONS[:4]]
+    row2 = [InlineKeyboardButton(f"⏱ {label}", callback_data=f"sumtime_{group_key}:{code}")
+            for label, code in _TIMEFRAME_OPTIONS[4:]]
+    return InlineKeyboardMarkup([row1, row2])
+
+async def group_button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Step 1 — Pencet tombol grup → tampilkan pilihan rentang waktu."""
+    query = update.callback_query
+    if not query:
+        return
+
+    data = query.data or ""
+    if not data.startswith("sumgroup_"):
+        return
+
+    await query.answer()
+
+    # Tentukan nama/identifikasi grup untuk ditampilkan
+    if data.startswith("sumgroup_idx:"):
+        idx_str = data.replace("sumgroup_idx:", "")
+        user_groups = context.user_data.get('user_groups', [])
+        try:
+            idx = int(idx_str)
+            group_name = user_groups[idx] if 0 <= idx < len(user_groups) else None
+        except (ValueError, IndexError):
+            group_name = None
+
+        if not group_name:
+            await query.message.reply_text(
+                "❌ Data grup kadaluarsa. Silakan ketik `/grup` kembali.",
+                parse_mode=constants.ParseMode.MARKDOWN
+            )
+            return
+
+        keyboard = _build_timeframe_keyboard(f"idx:{idx_str}")
+        display_name = group_name
+
+    elif data.startswith("sumgroup_cid:"):
+        cid_str = data.replace("sumgroup_cid:", "")
+        try:
+            cid = int(cid_str)
+            chat = await context.bot.get_chat(cid)
+            display_name = chat.title or f"Grup {cid}"
+        except Exception:
+            display_name = f"Grup {cid_str}"
+        keyboard = _build_timeframe_keyboard(f"cid:{cid_str}")
+    else:
+        return
+
+    await query.message.reply_text(
+        f"📋 *{display_name}*\n\n"
+        "⏰ Pilih rentang waktu yang ingin dirangkum:",
+        parse_mode=constants.ParseMode.MARKDOWN,
+        reply_markup=keyboard
+    )
+
+async def timeframe_button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Step 2 — Pencet pilihan jam → mulai summary."""
+    query = update.callback_query
+    if not query:
+        return
+
+    data = query.data or ""
+    if not data.startswith("sumtime_"):
+        return
+
+    # Format: sumtime_idx:2:6h  atau  sumtime_cid:-100123:24h
+    # Pisahkan dari belakang supaya aman dengan cid negatif
+    rest = data[len("sumtime_"):]
+    # rest = "idx:2:6h" atau "cid:-100123:6h"
+    last_colon = rest.rfind(":")
+    group_key = rest[:last_colon]   # "idx:2" atau "cid:-100123"
+    tf_code   = rest[last_colon+1:] # "6h"
+
+    # Parse timeframe code → timedelta
+    tf_map = {"1h": 1, "3h": 3, "6h": 6, "12h": 12, "24h": 24, "3d": 72, "7d": 168}
+    hours = tf_map.get(tf_code, 24)
+    hours_delta = timedelta(hours=hours)
+    tf_label = next((label for label, code in _TIMEFRAME_OPTIONS if code == tf_code), f"{hours} jam")
+
+    await query.answer(f"⚡ Merangkum {tf_label} terakhir...")
+    reply_to_id = query.message.message_id if query.message else None
+
+    if group_key.startswith("idx:"):
+        # Private userbot mode
+        idx_str = group_key[len("idx:"):]
+        user_groups = context.user_data.get('user_groups', [])
+        try:
+            idx = int(idx_str)
+            target_group = user_groups[idx] if 0 <= idx < len(user_groups) else None
+        except (ValueError, IndexError):
+            target_group = None
+
+        if not target_group:
+            await query.message.reply_text(
+                "❌ Data grup kadaluarsa. Silakan ketik `/grup` kembali.",
+                parse_mode=constants.ParseMode.MARKDOWN
+            )
+            return
+        # Gabungkan timeframe ke raw_input agar parse_timeframe_and_group bisa baca
+        await perform_private_userbot_summary(update, context, f"{tf_code} {target_group}", reply_to_id)
+
+    elif group_key.startswith("cid:"):
+        cid_str = group_key[len("cid:"):]
+        try:
+            cid = int(cid_str)
+        except ValueError:
+            await query.message.reply_text("❌ ID grup tidak valid.")
+            return
+        await perform_summary(cid, context, hours_delta=hours_delta, reply_to_id=reply_to_id)
+
+
 async def grup_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handler perintah /grup dan /groups untuk menampilkan daftar grup."""
+    """Handler perintah /grup dan /groups untuk menampilkan daftar grup dengan tombol instan."""
     if not update.effective_message or not update.effective_chat:
         return
 
-    # Jika diketik di DM Bot, tampilkan daftar grup akun pengguna via Telethon hanya jika session valid
-    if update.effective_chat.type == constants.ChatType.PRIVATE and await private_userbot_ready():
+    is_private = update.effective_chat.type == constants.ChatType.PRIVATE
+
+    # \u2500\u2500 Mode DM: ambil daftar grup langsung dari akun Telegram userbot via Telethon \u2500\u2500
+    # Bot TIDAK perlu berada di dalam grup \u2014 cukup akun userbot yang ada di grup tersebut.
+    if is_private and await private_userbot_ready():
+        status_msg = await update.effective_message.reply_text(
+            "\u23f3 _Memuat daftar grup dari akun Telegram Anda..._",
+            parse_mode=constants.ParseMode.MARKDOWN
+        )
         try:
             from userbot_summarizer import get_telethon_client
             client = await get_telethon_client()
             try:
-                msg_lines = ["📋 *DAFTAR SELURUH GRUP TELEGRAM ANDA:*\n"]
+                # Pastikan sudah terkoneksi dan terautentikasi
+                if not await client.is_user_authorized():
+                    await status_msg.edit_text(
+                        "\u274c Sesi userbot tidak valid. Jalankan ulang `generate_string_session.py` "
+                        "untuk membuat string session baru."
+                    )
+                    return
+
+                groups = []
                 async for dialog in client.iter_dialogs():
-                    if dialog.is_group or dialog.is_channel:
-                        msg_lines.append(f"• `{dialog.name}`")
-                if len(msg_lines) > 1:
-                    await send_split_message(update.effective_chat.id, "\n".join(msg_lines), context, reply_to_id=update.effective_message.message_id)
+                    if not (dialog.is_group or dialog.is_channel):
+                        continue
+                    # Skip dialog yang diarsipkan
+                    if dialog.archived:
+                        continue
+                    # Skip grup/channel yang sudah ditinggalkan (left=True)
+                    entity = dialog.entity
+                    if getattr(entity, "left", False):
+                        continue
+                    # Skip channel yang sudah dideactivate/dibanned/kicked
+                    if getattr(entity, "deactivated", False):
+                        continue
+                    groups.append(dialog.name)
+
+                if groups:
+                    context.user_data['user_groups'] = groups
+                    keyboard = [
+                        [InlineKeyboardButton(f"\u26a1 Rangkum: {gname}", callback_data=f"sumgroup_idx:{idx}")]
+                        for idx, gname in enumerate(groups[:25])
+                    ]
+                    total_info = f"{len(groups[:25])} dari {len(groups)}" if len(groups) > 25 else str(len(groups))
+                    try:
+                        await status_msg.delete()
+                    except Exception:
+                        pass
+                    await update.effective_message.reply_text(
+                        f"\U0001f92b *DAFTAR GRUP TELEGRAM ANDA* ({total_info} grup)\n"
+                        "_Grup ditampilkan langsung dari akun Telegram Anda \u2014 tanpa perlu bot di dalam grup._\n\n"
+                        "\U0001f447 Pencet tombol grup untuk langsung merangkum:",
+                        parse_mode=constants.ParseMode.MARKDOWN,
+                        reply_markup=InlineKeyboardMarkup(keyboard)
+                    )
+                    return
+                else:
+                    await status_msg.edit_text(
+                        "\u2139\ufe0f Tidak ada grup atau channel yang ditemukan di akun Telegram Anda."
+                    )
                     return
             finally:
                 await client.disconnect()
         except Exception as e:
-            logger.warning("Failed to fetch user groups via Telethon in DM: %s", e)
-    
-    tracked_chat_ids = await database.get_all_tracked_chats()
-    if not tracked_chat_ids:
+            logger.exception("Gagal fetch grup via Telethon di DM: %s", e)
+            try:
+                await status_msg.edit_text(
+                    f"\u274c *Gagal memuat daftar grup dari akun Telegram:*\n`{e}`\n\n"
+                    "\U0001f4a1 Pastikan `TELEGRAM_STRING_SESSION`, `TELEGRAM_API_ID`, dan `TELEGRAM_API_HASH` "
+                    "sudah benar di file `.env`.",
+                    parse_mode=constants.ParseMode.MARKDOWN
+                )
+            except Exception:
+                pass
+            return  # Jangan fallback ke DB \u2014 user minta lihat grup akunnya sendiri
+
+    # \u2500\u2500 Mode DM tanpa userbot aktif: tampilkan info cara setup \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    if is_private:
         await update.effective_message.reply_text(
-            "ℹ️ Belum ada obrolan grup yang tersimpan di database.",
+            "\u26a0\ufe0f *Fitur Agen Rahasia belum aktif.*\n\n"
+            "Untuk menampilkan grup tanpa bot di dalam grup, Anda perlu mengaktifkan *Userbot Mode*:\n"
+            "1. Isi `TELEGRAM_API_ID` dan `TELEGRAM_API_HASH` di file `.env`\n"
+            "2. Jalankan `python generate_string_session.py` untuk login\n"
+            "3. Isi hasil `TELEGRAM_STRING_SESSION` ke file `.env`\n"
+            "4. Restart bot\n\n"
+            "\U0001f4a1 Tanpa userbot, `/grup` hanya bisa menampilkan grup yang *bot sudah diundang ke dalamnya*.",
             parse_mode=constants.ParseMode.MARKDOWN
         )
         return
 
-    msg_lines = ["📋 *DAFTAR GRUP TELEGRAM YANG DIPANTAU BOT:*\n"]
-    count = 0
+    # \u2500\u2500 Fallback untuk grup (bukan DM): tampilkan grup yang di-track database \u2500
+    tracked_chat_ids = await database.get_all_tracked_chats()
+    if not tracked_chat_ids:
+        await update.effective_message.reply_text(
+            "\u2139\ufe0f Belum ada obrolan grup yang tersimpan di database.",
+            parse_mode=constants.ParseMode.MARKDOWN
+        )
+        return
+
+    # Bangun keyboard \u2014 skip grup yang sudah tidak bisa diakses bot
+    keyboard = []
+    invalid_count = 0
     for cid in tracked_chat_ids:
         try:
             chat = await context.bot.get_chat(cid)
             if chat.type in [constants.ChatType.GROUP, constants.ChatType.SUPERGROUP, constants.ChatType.CHANNEL]:
-                title = chat.title or f"Grup_{cid}"
-                msg_lines.append(f"• *{title}* (`ID: {cid}`)")
-                count += 1
+                title = chat.title or f"Grup {cid}"
+                keyboard.append([InlineKeyboardButton(f"\u26a1 Rangkum: {title}", callback_data=f"sumgroup_cid:{cid}")])
         except Exception:
-            pass
+            invalid_count += 1  # Bot sudah tidak ada di grup ini \u2014 skip saja
 
-    if count == 0:
+    if not keyboard:
+        hint = (
+            "\n\n\U0001f4a1 Bot mungkin sudah dikeluarkan dari semua grup. "
+            "Tambahkan kembali bot ke grup agar bisa merangkum."
+        ) if invalid_count > 0 else ""
         await update.effective_message.reply_text(
-            "ℹ️ Belum ada obrolan grup publik/terlacak yang aktif saat ini.",
+            f"\u2139\ufe0f Tidak ada grup aktif yang dapat dirangkum saat ini.{hint}",
             parse_mode=constants.ParseMode.MARKDOWN
         )
         return
 
-    await send_split_message(update.effective_chat.id, "\n".join(msg_lines), context, reply_to_id=update.effective_message.message_id)
+    note = f" _({invalid_count} grup tidak aktif disembunyikan)_" if invalid_count > 0 else ""
+    await update.effective_message.reply_text(
+        f"\U0001f4cb *DAFTAR GRUP YANG DIPANTAU BOT* ({len(keyboard)} grup){note}\n\n"
+        "\U0001f447 Pencet tombol grup di bawah ini untuk langsung merangkum:",
+        parse_mode=constants.ParseMode.MARKDOWN,
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
 
 async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handler perintah /model untuk cek sisa kuota (%) & ganti provider/model AI."""
@@ -754,17 +985,42 @@ async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     
     if context.args:
         arg = context.args[0].lower()
-        if arg in ["gemini", "hermes", "claude", "anthropic"]:
-            target_prov = "anthropic" if arg in ["claude", "anthropic"] else arg
-            if target_prov == "anthropic" and not config.ANTHROPIC_API_KEY:
+        valid_args = ["gemini", "hermes", "claude", "anthropic", "openai", "gpt", "gpt4", "gpt-4o", "gpt-4o-mini"]
+        if arg in valid_args:
+            if arg in ["openai", "gpt", "gpt4", "gpt-4o", "gpt-4o-mini"]:
+                target_prov = "openai"
+                if arg in ["gpt-4o", "gpt-4o-mini"]:
+                    config.OPENAI_MODEL = arg
+            elif arg in ["claude", "anthropic"]:
+                target_prov = "anthropic"
+            else:
+                target_prov = arg
+
+            if target_prov == "openai" and not config.OPENAI_API_KEY:
                 await update.effective_message.reply_text(
-                    "⚠️ *Gagal mengubah ke Claude!* `ANTHROPIC_API_KEY` belum diisi di file `.env`.\n"
-                    "Silakan isi API Key Claude terlebih dahulu atau gunakan `/model gemini` / `/model hermes`.",
+                    "⚠️ *Gagal mengubah ke OpenAI GPT!* `OPENAI_API_KEY` belum diisi di file `.env`.\n"
+                    "Silakan isi API Key OpenAI terlebih dahulu atau gunakan `/model gemini` / `/model hermes`.",
                     parse_mode=constants.ParseMode.MARKDOWN
                 )
                 return
+            elif target_prov == "anthropic" and not config.ANTHROPIC_API_KEY:
+                await update.effective_message.reply_text(
+                    "⚠️ *Gagal mengubah ke Claude!* `ANTHROPIC_API_KEY` belum diisi di file `.env`.\n"
+                    "Silakan isi API Key Claude terlebih dahulu atau gunakan `/model gemini` / `/model openai`.",
+                    parse_mode=constants.ParseMode.MARKDOWN
+                )
+                return
+
             config.AI_PROVIDER = target_prov
-            mod_name = config.HERMES_MODEL if target_prov == "hermes" else (config.GEMINI_MODEL if target_prov == "gemini" else config.ANTHROPIC_MODEL)
+            if target_prov == "openai":
+                mod_name = config.OPENAI_MODEL
+            elif target_prov == "hermes":
+                mod_name = config.HERMES_MODEL
+            elif target_prov == "anthropic":
+                mod_name = config.ANTHROPIC_MODEL
+            else:
+                mod_name = config.GEMINI_MODEL
+
             await update.effective_message.reply_text(
                 f"✅ *Provider AI berhasil diubah ke: {target_prov.upper()}* (`{mod_name}`)",
                 parse_mode=constants.ParseMode.MARKDOWN
@@ -772,7 +1028,14 @@ async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             return
 
     cur_prov = config.AI_PROVIDER.upper()
-    cur_mod = config.HERMES_MODEL if config.AI_PROVIDER == "hermes" else (config.GEMINI_MODEL if config.AI_PROVIDER == "gemini" else config.ANTHROPIC_MODEL)
+    if config.AI_PROVIDER == "openai":
+        cur_mod = config.OPENAI_MODEL
+    elif config.AI_PROVIDER == "hermes":
+        cur_mod = config.HERMES_MODEL
+    elif config.AI_PROVIDER == "anthropic":
+        cur_mod = config.ANTHROPIC_MODEL
+    else:
+        cur_mod = config.GEMINI_MODEL
     
     quota_status = await check_all_quotas()
 
@@ -782,9 +1045,10 @@ async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         f"• Model Spesifik: `{cur_mod}`\n\n"
         f"{quota_status}\n\n"
         "⚙️ *Cara Ganti Provider AI:*\n"
-        "• `/model hermes` — Ganti ke Nous-Hermes (Gratis / OpenRouter)\n"
+        "• `/model gpt` atau `/model openai` — Ganti ke OpenAI GPT-4o / GPT-4o-mini\n"
         "• `/model gemini` — Ganti ke Google Gemini AI (Gratis)\n"
-        "• `/model claude` — Ganti ke Anthropic Claude"
+        "• `/model claude` — Ganti ke Anthropic Claude\n"
+        "• `/model hermes` — Ganti ke Nous-Hermes (OpenRouter)"
     )
     await update.effective_message.reply_text(
         msg,
@@ -1022,8 +1286,35 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     """Log Error yang disebabkan oleh Update."""
     logger.error("Exception saat memproses update %s: %s", update, context.error, exc_info=context.error)
 
+# ── Single-instance guard ────────────────────────────────────────────────────
+# Bind sebuah port lokal unik; jika sudah dipakai berarti ada instance lain.
+_LOCK_PORT = 47891
+_lock_socket: socket.socket | None = None
+
+def _acquire_instance_lock() -> bool:
+    """Coba rebut port lock. Return True jika berhasil (instance pertama)."""
+    global _lock_socket
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
+        s.bind(("127.0.0.1", _LOCK_PORT))
+        s.listen(1)
+        _lock_socket = s
+        return True
+    except OSError:
+        return False
+# ─────────────────────────────────────────────────────────────────────────────
+
 def main() -> None:
     """Entry point utama untuk menjalankan Telegram Bot."""
+    # Cek duplikat instance
+    if not _acquire_instance_lock():
+        print(
+            "\n[ERROR] Bot sudah berjalan di proses lain (port 47891 sedang dipakai).\n"
+            "Tutup terminal / jendela bot yang lama terlebih dahulu, lalu jalankan lagi.\n"
+        )
+        sys.exit(1)
+
     is_valid, err_msg = config.validate_config()
     if not is_valid:
         logger.error("Konfigurasi tidak lengkap: %s", err_msg)
@@ -1033,6 +1324,8 @@ def main() -> None:
 
     if config.AI_PROVIDER == "gemini":
         active_model = config.GEMINI_MODEL
+    elif config.AI_PROVIDER == "openai":
+        active_model = config.OPENAI_MODEL
     elif config.AI_PROVIDER == "anthropic":
         active_model = config.ANTHROPIC_MODEL
     else:
@@ -1047,6 +1340,8 @@ def main() -> None:
     # Daftarkan handler perintah
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CallbackQueryHandler(group_button_callback, pattern=r"^sumgroup_"))
+    app.add_handler(CallbackQueryHandler(timeframe_button_callback, pattern=r"^sumtime_"))
     app.add_handler(CallbackQueryHandler(help_button_callback))
     app.add_handler(CommandHandler("summary", summary_command))
     app.add_handler(CommandHandler("satpam", satpam_command))

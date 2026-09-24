@@ -13,6 +13,9 @@ from config import (
     AI_PROVIDER,
     GEMINI_API_KEY,
     GEMINI_MODEL,
+    OPENAI_API_KEY,
+    OPENAI_MODEL,
+    OPENAI_BASE_URL,
     ANTHROPIC_API_KEY,
     ANTHROPIC_MODEL,
     HERMES_API_KEY,
@@ -123,6 +126,8 @@ def get_summary_chunk_plan(message_count: int) -> int:
 class ChatSummarizer:
     def __init__(self, provider: Optional[str] = None, model: Optional[str] = None):
         self.provider = (provider or config.AI_PROVIDER).strip().lower()
+        if self.provider in ["gpt", "chatgpt", "openai"]:
+            self.provider = "openai"
         self.gemini_client: Optional[genai.Client] = None
         self.anthropic_client: Optional[anthropic.AsyncAnthropic] = None
 
@@ -130,6 +135,8 @@ class ChatSummarizer:
             if config.GEMINI_API_KEY:
                 self.gemini_client = genai.Client(api_key=config.GEMINI_API_KEY)
             self.model = model or config.GEMINI_MODEL
+        elif self.provider == "openai":
+            self.model = model or config.OPENAI_MODEL
         elif self.provider == "anthropic":
             if config.ANTHROPIC_API_KEY:
                 self.anthropic_client = anthropic.AsyncAnthropic(api_key=config.ANTHROPIC_API_KEY)
@@ -138,44 +145,87 @@ class ChatSummarizer:
             self.provider = "hermes"
             self.model = model or config.HERMES_MODEL
 
+    async def _call_openai(self, prompt: str, system_instruction: str = SYSTEM_PROMPT) -> str:
+        """Panggil OpenAI GPT API (gpt-4o, gpt-4o-mini, dll)."""
+        if not config.OPENAI_API_KEY:
+            raise ValueError("OPENAI_API_KEY belum diisi di file .env!")
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {config.OPENAI_API_KEY}"
+        }
+        url = f"{config.OPENAI_BASE_URL.rstrip('/')}/chat/completions"
+        model_name = self.model if (self.model and ("gpt" in self.model.lower() or "o1" in self.model.lower() or "o3" in self.model.lower())) else config.OPENAI_MODEL
+
+        payload = {
+            "model": model_name,
+            "messages": [
+                {"role": "system", "content": system_instruction},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.2,
+            "max_tokens": 2048
+        }
+
+        async with httpx.AsyncClient(timeout=35.0) as client:
+            resp = await client.post(url, json=payload, headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                content = data["choices"][0]["message"]["content"]
+                if content and str(content).strip():
+                    return str(content)
+                raise RuntimeError("OpenAI API returned empty response content.")
+            else:
+                raise RuntimeError(f"OpenAI API Error ({resp.status_code}): {resp.text}")
+
     async def _call_gemini(self, prompt: str) -> str:
-        """Panggil Google Gemini dengan daftar model yang valid dan aman dari rate limit."""
+        """Panggil Google Gemini dengan retry otomatis & fallback model jika 503 high demand."""
         if not self.gemini_client:
             self.gemini_client = genai.Client(api_key=config.GEMINI_API_KEY)
 
         models_to_try = []
         if self.model and self.model.startswith("gemini"):
             models_to_try.append(self.model)
-        for m in ["gemini-3.6-flash", "gemini-2.5-flash"]:
-            if m.startswith("gemini") and m not in models_to_try:
+        for m in ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-2.5-flash", "gemini-flash-latest", "gemini-3.5-flash-lite"]:
+            if m not in models_to_try:
                 models_to_try.append(m)
 
+        first_exception = None
         last_exception = None
         for target_model in models_to_try:
-            try:
-                response = await self.gemini_client.aio.models.generate_content(
-                    model=target_model,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        system_instruction=SYSTEM_PROMPT,
-                        max_output_tokens=2048,
-                        temperature=0.2,
+            for attempt in range(3):
+                try:
+                    response = await self.gemini_client.aio.models.generate_content(
+                        model=target_model,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            system_instruction=SYSTEM_PROMPT,
+                            max_output_tokens=2048,
+                            temperature=0.2,
+                        )
                     )
-                )
-                if response and response.text:
-                    return response.text
-            except Exception as e:
-                last_exception = e
-                err_str = str(e).lower()
-                if "404" in err_str or "not_found" in err_str:
-                    logger.warning("Gemini model %s not found or deprecated, trying next model...", target_model)
-                    continue
-                if "429" in err_str or "quota" in err_str or "resource_exhausted" in err_str:
-                    logger.warning("Gemini model %s rate limited; skipping to next backend...", target_model)
+                    if response and response.text:
+                        return response.text
+                except Exception as e:
+                    if first_exception is None:
+                        first_exception = e
+                    last_exception = e
+                    err_str = str(e).lower()
+                    if "503" in err_str or "unavailable" in err_str or "high demand" in err_str:
+                        logger.warning("Gemini model %s 503 high demand (attempt %d/3), waiting 1.5s...", target_model, attempt + 1)
+                        await asyncio.sleep(1.5)
+                        continue
+                    if "404" in err_str or "not_found" in err_str:
+                        logger.warning("Gemini model %s not found, trying next model...", target_model)
+                        break
+                    if "429" in err_str or "quota" in err_str or "resource_exhausted" in err_str:
+                        logger.warning("Gemini model %s rate limited, trying next model...", target_model)
+                        break
+                    logger.warning("Gemini model %s failed: %s", target_model, e)
                     break
-                logger.warning("Gemini model %s failed: %s", target_model, e)
-                break
 
+        if first_exception and ("404" not in str(first_exception).lower() and "not_found" not in str(first_exception).lower()):
+            raise first_exception
         if last_exception:
             raise last_exception
         return ""
@@ -284,6 +334,8 @@ class ChatSummarizer:
         try:
             if primary == "gemini":
                 return await self._call_gemini(prompt)
+            elif primary == "openai":
+                return await self._call_openai(prompt)
             elif primary == "anthropic":
                 return await self._call_anthropic(prompt)
             else:
@@ -293,12 +345,14 @@ class ChatSummarizer:
             try:
                 if fallback == "gemini" and config.GEMINI_API_KEY:
                     return await self._call_gemini(prompt)
+                elif fallback == "openai" and config.OPENAI_API_KEY:
+                    return await self._call_openai(prompt)
                 elif fallback == "hermes" and config.HERMES_API_KEY:
                     return await self._call_hermes(prompt)
             except Exception as fallback_err:
                 logger.error("Provider cadangan %s juga gagal: %s", fallback, fallback_err)
             
-            # Jika primary anthropic gagal, selalu usahakan fallback ke Gemini jika ada key nya
+            # Jika primary anthropic/openai gagal, selalu usahakan fallback ke Gemini jika ada key nya
             if config.GEMINI_API_KEY:
                 try:
                     return await self._call_gemini(prompt)
@@ -311,11 +365,12 @@ class ChatSummarizer:
         """Panggil Gemini untuk Chat Interaktif dengan fallback model."""
         if not self.gemini_client:
             self.gemini_client = genai.Client(api_key=config.GEMINI_API_KEY)
-        models_to_try = [m for m in [config.GEMINI_MODEL, "gemini-3.6-flash"] if m and m.startswith("gemini")]
+        models_to_try = [m for m in [config.GEMINI_MODEL, "gemini-3.6-flash", "gemini-3.5-flash", "gemini-2.5-flash", "gemini-flash-latest"] if m and m.startswith("gemini")]
         if self.model and self.model.startswith("gemini") and self.model not in models_to_try:
             models_to_try.insert(0, self.model)
         seen = set()
         models_to_try = [m for m in models_to_try if not (m in seen or seen.add(m))]
+        first_exception = None
         last_exception = None
         for target_model in models_to_try:
             for attempt in range(3):
@@ -332,6 +387,8 @@ class ChatSummarizer:
                     if response and response.text:
                         return response.text
                 except Exception as e:
+                    if first_exception is None:
+                        first_exception = e
                     last_exception = e
                     err_str = str(e).lower()
                     if "503" in err_str or "unavailable" in err_str or "429" in err_str or "resource_exhausted" in err_str:
@@ -344,6 +401,8 @@ class ChatSummarizer:
                     else:
                         logger.warning("Gemini chat model %s failed: %s", target_model, e)
                         break
+        if first_exception and ("404" not in str(first_exception).lower() and "not_found" not in str(first_exception).lower()):
+            raise first_exception
         if last_exception:
             raise last_exception
         return ""
@@ -368,6 +427,8 @@ class ChatSummarizer:
         try:
             if primary == "gemini":
                 return await self._call_gemini_chat(prompt, chat_system_prompt)
+            elif primary == "openai":
+                return await self._call_openai(prompt, system_instruction=chat_system_prompt)
             elif primary == "anthropic":
                 if not self.anthropic_client:
                     self.anthropic_client = anthropic.AsyncAnthropic(api_key=config.ANTHROPIC_API_KEY)
@@ -385,6 +446,8 @@ class ChatSummarizer:
             try:
                 if fallback == "gemini" and config.GEMINI_API_KEY:
                     return await self._call_gemini_chat(prompt, chat_system_prompt)
+                elif fallback == "openai" and config.OPENAI_API_KEY:
+                    return await self._call_openai(prompt, system_instruction=chat_system_prompt)
                 elif fallback == "hermes" and config.HERMES_API_KEY:
                     return await self._call_hermes(prompt, system_instruction=chat_system_prompt)
             except Exception as fallback_err:
@@ -409,6 +472,8 @@ class ChatSummarizer:
         try:
             if self.provider == "gemini":
                 return await self._call_gemini_chat(prompt, system_instruction)
+            if self.provider == "openai":
+                return await self._call_openai(prompt, system_instruction=system_instruction)
             if self.provider == "anthropic":
                 if not self.anthropic_client:
                     self.anthropic_client = anthropic.AsyncAnthropic(api_key=config.ANTHROPIC_API_KEY)
@@ -483,6 +548,8 @@ class ChatSummarizer:
 
             if self.provider == "gemini":
                 ai_label = "Google Gemini AI (Gratis)"
+            elif self.provider == "openai":
+                ai_label = f"OpenAI GPT ({self.model})"
             elif self.provider == "anthropic":
                 ai_label = f"Claude ({self.model})"
             else:
@@ -502,6 +569,18 @@ class ChatSummarizer:
             logger.exception("Error during summarization: %s", e)
             err_str = str(e)
             lower_err = err_str.lower()
+            if "503" in lower_err or "unavailable" in lower_err or "high demand" in lower_err:
+                return (
+                    "⏳ *Server Google Gemini sedang padat / High Demand (503).*\n\n"
+                    "Server Google AI sedang mengalami lonjakan beban tinggi sementara.\n\n"
+                    "💡 *Solusi:* Silakan coba kirim permintaan lagi dalam beberapa detik, atau gunakan perintah `/model` untuk mengganti AI."
+                )
+            if "insufficient_quota" in lower_err or "credit_balance_exhausted" in lower_err:
+                return (
+                    "⚠️ *OpenAI API Key Belum Memiliki Saldo/Credit ($0 Credit)*\n\n"
+                    "API Key dari OpenAI membutuhkan saldo terisi di [platform.openai.com/billing](https://platform.openai.com/settings/organization/billing).\n\n"
+                    "💡 *Solusi Gratis:* Gunakan perintah `/model gemini` di Telegram untuk memakai **Google Gemini AI 100% Gratis**!"
+                )
             if "api_key" in lower_err or "api key" in lower_err or "invalid" in lower_err:
                 return f"❌ *Error API Key:* API Key {self.provider.upper()} tidak valid atau belum diisi. Periksa file `.env`."
             if "resource_exhausted" in lower_err or "rate_limit" in lower_err or "429" in err_str or "quota" in lower_err:
@@ -510,5 +589,9 @@ class ChatSummarizer:
                     "Solusi: gunakan API key yang valid untuk provider lain, atau tunggu beberapa menit lalu coba lagi."
                 )
             if "not_found" in lower_err or "404" in err_str:
-                return "❌ *Model AI yang dipilih tidak tersedia lagi.* Perbarui konfigurasi model di file `.env` atau pakai provider lain."
+                return (
+                    "❌ *Model AI yang dipilih tidak tersedia lagi (404).* \n\n"
+                    "Model yang diatur di `.env` mungkin sudah usang/dihentikan oleh Google/OpenAI.\n\n"
+                    "💡 *Solusi:* Gunakan `GEMINI_MODEL=gemini-3.5-flash` atau `gemini-3.6-flash` di file `.env`."
+                )
             return f"❌ *Terjadi kesalahan saat memproses ringkasan:* {err_str}"
