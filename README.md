@@ -3,7 +3,7 @@
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933?style=for-the-badge&logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![Telegram](https://img.shields.io/badge/Telegram-Bot%20%26%20MTProto-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://core.telegram.org/)
-[![AI Engine](https://img.shields.io/badge/AI%20Engine-Gemini%20%7C%20Claude%20%7C%20Hermes-8E44AD?style=for-the-badge&logo=openai&logoColor=white)](https://aistudio.google.com/)
+[![AI Engine](https://img.shields.io/badge/AI%20Engine-Gemini%20%7C%20GPT%20%7C%20Claude%20%7C%20Hermes-8E44AD?style=for-the-badge&logo=openai&logoColor=white)](https://aistudio.google.com/)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://www.docker.com/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)](LICENSE)
 
@@ -63,8 +63,9 @@ Dalam lingkungan kerja modern, grup komunikasi Telegram sering diisi oleh ratusa
 ### 3. 🤖 Multi-Provider AI Matrix Engine
 Dukungan pengoperasian fleksibel dengan berbagai provider kecerdasan buatan terkemuka:
 - **Google Gemini** (`gemini-3.6-flash`) — *Default, Ultra Fast & Gratis*.
+- **OpenAI GPT** (`gpt-4o-mini` / `gpt-4o`) — *Presisi Tinggi & Kecepatan Maksimal*.
 - **Anthropic Claude** (`claude-3-5-sonnet-20241022`) — *Analisis Logika & Bahasa Tingkat Tinggi*.
-- **Nous-Hermes AI** (`hermes-3-llama-3.1-8b`) — *Integrasi OpenRouter & LLM Lokal via Ollama*.
+- **Nous-Hermes AI** (`nex-agi/nex-n2.5-mini:free`) — *Integrasi OpenRouter & LLM Lokal via Ollama*.
 
 ### 4. 🕵️ Silent MTProto Private UserBot (`userbot_summarizer.py`)
 - Memungkinkan analisis dan ekstraksi ringkasan grup **tanpa perlu mengundang bot publik** ke dalam grup.
@@ -87,45 +88,47 @@ Berikut adalah alur arsitektur dari **N.I.E.R AI**:
 
 ```mermaid
 flowchart TD
-    subgraph Telegram Network Layer
-        TG_Group[ Telegram Group Chat]
-        TG_User[ User Saved Messages]
+    subgraph Layer1 ["1️⃣ Input Layer (Telegram & Simulator)"]
+        TG_Group["💬 Telegram Group Chat"]
+        TG_User["🤫 User Saved Messages (MTProto)"]
+        Bot_Sim["🎭 Multi-Bot Persona Simulator"]
     end
 
-    subgraph N.I.E.R Intelligence Engine
-        Bot_Core[bot.py / Bot Engine]
-        UserBot_Core[userbot_summarizer.py / MTProto]
-        Satpam_Guard[Satpam Link Security]
-        Bot_Sim[multi_bot_simulator.py / Simulator]
+    subgraph Layer2 ["2️⃣ N.I.E.R Intelligence Engine"]
+        Satpam["🛡️ Satpam Link Security Guard"]
+        Bot_Core["🤖 Main Telegram Bot Engine (bot.py)"]
+        UserBot_Core["🕵️ Silent MTProto UserBot (userbot_summarizer.py)"]
+        Chunk_Engine["📋 Map-Reduce Chunking & Summary Engine"]
     end
 
-    subgraph Data & AI Orchestrator
-        Async_DB[(SQLite - chat_history.db)]
-        Chunk_Engine[Map-Reduce Chunking Engine]
-        AI_Gemini[Google Gemini API]
-        AI_Claude[Anthropic Claude API]
-        AI_Hermes[OpenRouter / Ollama Hermes]
+    subgraph Layer3 ["3️⃣ Storage Layer"]
+        Async_DB[("💾 SQLite Async DB (chat_history.db)")]
     end
 
-    TG_Group -->|Live Message Stream| Bot_Core
-    TG_Group -->|MTProto Telethon Fetch| UserBot_Core
-    TG_Group -->|URL Validation| Satpam_Guard
-    Bot_Sim -->|Inject Simulated Chat| TG_Group
+    subgraph Layer4 ["4️⃣ Multi-AI Provider Matrix"]
+        AI_Gemini["🟢 Google Gemini 3.6 Flash (Gratis)"]
+        AI_OpenAI["🟢 OpenAI GPT-4o / GPT-4o-mini"]
+        AI_Claude["🟢 Anthropic Claude 3.5 Sonnet"]
+        AI_Hermes["🟢 Nous-Hermes (OpenRouter / Ollama)"]
+    end
 
-    Bot_Core -->|Async Insert| Async_DB
-    Bot_Core -->|Trigger Recap| Chunk_Engine
-    UserBot_Core -->|Trigger Recap| Chunk_Engine
+    Bot_Sim -->|Inject Simulasi Pesan| TG_Group
+    TG_Group -->|Validasi URL / Link| Satpam
+    TG_Group -->|Pesan Masuk (Real-Time)| Bot_Core
+    TG_Group -->|BACA Silent Chat (MTProto)| UserBot_Core
 
-    Chunk_Engine -->|Fetch History Window| Async_DB
-    Chunk_Engine -->|Send Prompt Chunk| AI_Gemini
-    Chunk_Engine -->|Send Prompt Chunk| AI_Claude
-    Chunk_Engine -->|Send Prompt Chunk| AI_Hermes
+    Bot_Core -->|Simpan Chat History| Async_DB
+    Bot_Core -->|Pemicu Summary Manual / Schedule| Chunk_Engine
+    UserBot_Core -->|Pemicu Summary Rahasia| Chunk_Engine
 
-    Chunk_Engine -->|Format Executive Recap| Bot_Core
-    Chunk_Engine -->|Format Executive Recap| UserBot_Core
+    Chunk_Engine -->|Ambil Riwayat Chat| Async_DB
+    Chunk_Engine -->|Kirim Batch Transkrip| AI_Gemini
+    Chunk_Engine -->|Kirim Batch Transkrip| AI_OpenAI
+    Chunk_Engine -->|Kirim Batch Transkrip| AI_Claude
+    Chunk_Engine -->|Kirim Batch Transkrip| AI_Hermes
 
-    Bot_Core -->|Post Executive Recap| TG_Group
-    UserBot_Core -->|Post Executive Recap| TG_User
+    Chunk_Engine -->|Kirim Executive Recap| TG_Group
+    Chunk_Engine -->|Kirim Executive Recap Rahasia| TG_User
 ```
 
 ---
@@ -170,9 +173,10 @@ c:\aiagent\
 - **Node.js** *(Opsional)*: Versi `20.x` atau lebih baru (jika memilih runner Node.js).
 - **Akun Telegram**: Akun aktif & Bot Token dari [@BotFather](https://t.me/BotFather).
 - **AI Provider API Key**:
-  - **Google Gemini API Key** *(Rekomendasi - Fast & Free)*: [Google AI Studio](https://aistudio.google.com/)
+  - **Google Gemini API Key** *(Default - Fast & Free)*: [Google AI Studio](https://aistudio.google.com/)
+  - **OpenAI GPT API Key** *(Aktif - GPT-4o-mini & GPT-4o)*: [OpenAI Platform](https://platform.openai.com/api-keys)
   - **Anthropic Claude API Key** *(Opsional)*: [Anthropic Console](https://console.anthropic.com/)
-  - **OpenRouter / Ollama Key** *(Opsional)*: Untuk model Hermes 3.
+  - **OpenRouter / Hermes API Key** *(Opsional)*: [OpenRouter Keys](https://openrouter.ai/keys)
 
 ---
 
@@ -220,6 +224,10 @@ npm install
    - Akses [Google AI Studio](https://aistudio.google.com/app/apikey).
    - Klik **Create API Key** dan salin kunci API tersebut.
 
+3. **OpenAI GPT API Key**:
+   - Akses [OpenAI Platform API Keys](https://platform.openai.com/api-keys).
+   - Klik **Create new secret key** dan salin kunci API tersebut (berawalan `sk-proj-...`).
+
 ---
 
 ### 3. Penyetelan File `.env`
@@ -236,20 +244,24 @@ Buka file `.env` dengan text editor dan sesuaikan nilainya:
 # Token Utama Bot dari @BotFather
 TELEGRAM_BOT_TOKEN=7123456789:ABCDefgh-1234567890
 
-# Pilihan Provider AI ("gemini", "anthropic", atau "hermes")
+# Pilihan Provider AI ("gemini", "openai", "claude", atau "hermes")
 AI_PROVIDER=gemini
 
 # Provider 1: Google Gemini (GRATIS)
 GEMINI_API_KEY=AIzaSy...
 GEMINI_MODEL=gemini-3.6-flash
 
-# Provider 2: Anthropic Claude (Opsional)
+# Provider 2: OpenAI GPT (Aktif)
+OPENAI_API_KEY=sk-proj-...
+OPENAI_MODEL=gpt-4o-mini
+
+# Provider 3: Anthropic Claude (Opsional)
 ANTHROPIC_API_KEY=sk-ant-api03-...
 ANTHROPIC_MODEL=claude-3-5-sonnet-20241022
 
-# Provider 3: Nous-Hermes via OpenRouter / Ollama (Opsional)
+# Provider 4: Nous-Hermes via OpenRouter / Ollama
 HERMES_API_KEY=sk-or-v1-...
-HERMES_MODEL=nousresearch/hermes-3-llama-3.1-8b:free
+HERMES_MODEL=nex-agi/nex-n2.5-mini:free
 HERMES_BASE_URL=https://openrouter.ai/api/v1
 
 # Credentials Client API Telegram (Untuk Silent UserBot MTProto)
@@ -340,7 +352,11 @@ python multi_bot_simulator.py --chat-id -100123456789 --topic "Persiapan Peluncu
 | `/schedule <jam>` | Admin Grup | Mengaktifkan penjadwalan ringkasan otomatis setiap `<jam>` jam (contoh: `/schedule 4`). |
 | `/unschedule` | Admin Grup | Mematikan jadwal ringkasan otomatis di grup. |
 | `/satpam` | Admin Grup | Konfigurasi proteksi anti-spam link (contoh: `/satpam on`, `/satpam off`, `/satpam status`). |
-| `/model` | Admin Grup | Menampilkan atau memilih provider/model AI yang aktif digunakan. |
+| `/model` | Admin Grup | Menampilkan status provider AI aktif dan estimasi sisa kuota. |
+| `/model gpt` | Admin Grup | Mengubah provider AI aktif ke **OpenAI GPT** (`gpt-4o-mini`). |
+| `/model gemini` | Admin Grup | Mengubah provider AI aktif ke **Google Gemini** (`gemini-3.6-flash`). |
+| `/model claude` | Admin Grup | Mengubah provider AI aktif ke **Anthropic Claude** (`claude-3-5-sonnet`). |
+| `/model hermes` | Admin Grup | Mengubah provider AI aktif ke **Nous-Hermes** via OpenRouter. |
 | `/groups` | Admin Grup | Menampilkan daftar grup yang sedang dipantau oleh N.I.E.R Bot. |
 | `/help` | Semua Anggota | Menampilkan panduan penggunaan dan informasi perintah bot. |
 
@@ -420,9 +436,7 @@ Panduan teknis rinci dapat dibaca di [DEPLOY_GUIDE.md](file:///c:/aiagent/DEPLOY
 
 ## 📄 Lisensi & Kontribusi
 
-Proyek **N.I.E.R AI** didistribusikan di bawah lisensi [MIT License](LICENSE). 
-
-Kontribusi, *bug report*, dan *feature request* sangat dialu-alukan! Silakan buat Pull Request atau buka Issue pada repository ini.
+Proyek **N.I.E.R AI** didistribusikan secara *Open Source* di bawah lisensi resmi [MIT License](LICENSE). File lisensi lengkap telah disertakan dalam repository ini.
 
 <p align="center">
   <b>N.I.E.R AI</b> — <i>Network Intelligence & Executive Recap Engine</i>

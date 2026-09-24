@@ -15,5 +15,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application files
 COPY . .
 
-# Run the Telegram bot in long-polling mode.
-CMD ["python", "bot.py"]
+# Run both Online Bot (bot.py) and Secret Bot (userbot_summarizer.py --listen) together.
+CMD ["python", "run_all.py"]

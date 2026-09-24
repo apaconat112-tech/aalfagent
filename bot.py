@@ -581,7 +581,8 @@ async def perform_summary(
         )
 
     try:
-        summary_result = await summarizer.summarize_messages(messages, timeframe_info=timeframe_label)
+        active_summarizer = ChatSummarizer(provider=config.AI_PROVIDER)
+        summary_result = await active_summarizer.summarize_messages(messages, timeframe_info=timeframe_label)
         # Perbarui last summary timestamp
         await database.update_last_summary_time(chat_id, now)
         
@@ -680,7 +681,8 @@ async def perform_private_userbot_summary(update: Update, context: ContextTypes.
             else:
                 tf_info = f"{len(formatted_messages)} pesan terbaru"
 
-            summary_result = await summarizer.summarize_messages(formatted_messages, timeframe_info=tf_info)
+            active_summarizer = ChatSummarizer(provider=config.AI_PROVIDER)
+            summary_result = await active_summarizer.summarize_messages(formatted_messages, timeframe_info=tf_info)
 
             try:
                 await status_msg.delete()
@@ -983,6 +985,8 @@ async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not update.effective_message:
         return
     
+    config.reload_config()
+    
     if context.args:
         arg = context.args[0].lower()
         valid_args = ["gemini", "hermes", "claude", "anthropic", "openai", "gpt", "gpt4", "gpt-4o", "gpt-4o-mini"]
@@ -1012,6 +1016,9 @@ async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 return
 
             config.AI_PROVIDER = target_prov
+            global summarizer
+            summarizer = ChatSummarizer(provider=target_prov)
+
             if target_prov == "openai":
                 mod_name = config.OPENAI_MODEL
             elif target_prov == "hermes":
@@ -1021,8 +1028,12 @@ async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             else:
                 mod_name = config.GEMINI_MODEL
 
+            extra_note = ""
+            if target_prov == "hermes" and not config.HERMES_API_KEY and "openrouter" in config.HERMES_BASE_URL.lower():
+                extra_note = "\n\n⚠️ *Perhatian:* `HERMES_API_KEY` di file `.env` masih kosong. Jika server OpenRouter menolak tanpa API key, bot akan otomatis menggunakan *Google Gemini AI* sebagai cadangan (fallback)."
+
             await update.effective_message.reply_text(
-                f"✅ *Provider AI berhasil diubah ke: {target_prov.upper()}* (`{mod_name}`)",
+                f"✅ *Provider AI berhasil diubah ke: {target_prov.upper()}* (`{mod_name}`){extra_note}",
                 parse_mode=constants.ParseMode.MARKDOWN
             )
             return

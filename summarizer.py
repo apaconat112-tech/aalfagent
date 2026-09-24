@@ -259,7 +259,15 @@ class ChatSummarizer:
         models_to_try = []
         if self.model and not self.model.startswith("gemini") and not self.model.startswith("claude"):
             models_to_try.append(self.model)
-        for m in ["openrouter/auto", "google/gemma-4-31b-it:free"]:
+        for m in [
+            "nex-agi/nex-n2.5-mini:free",
+            "nex-agi/nex-n2.5-pro:free",
+            "nvidia/nemotron-3.5-lightning:free",
+            "qwen/qwen3.8-27b:free",
+            "dots-studio/dots-3-note-preview:free",
+            "liquid/lfm-2.5-2.6b:free",
+            "openrouter/auto"
+        ]:
             if m not in models_to_try:
                 models_to_try.append(m)
 
@@ -333,29 +341,45 @@ class ChatSummarizer:
 
         try:
             if primary == "gemini":
-                return await self._call_gemini(prompt)
+                res = await self._call_gemini(prompt)
+                self.last_used_provider = "gemini"
+                return res
             elif primary == "openai":
-                return await self._call_openai(prompt)
+                res = await self._call_openai(prompt)
+                self.last_used_provider = "openai"
+                return res
             elif primary == "anthropic":
-                return await self._call_anthropic(prompt)
+                res = await self._call_anthropic(prompt)
+                self.last_used_provider = "anthropic"
+                return res
             else:
-                return await self._call_hermes(prompt)
+                res = await self._call_hermes(prompt)
+                self.last_used_provider = "hermes"
+                return res
         except Exception as primary_err:
             logger.warning("Provider utama %s gagal: %s. Mencoba provider cadangan %s...", primary, primary_err, fallback)
             try:
                 if fallback == "gemini" and config.GEMINI_API_KEY:
-                    return await self._call_gemini(prompt)
+                    res = await self._call_gemini(prompt)
+                    self.last_used_provider = "gemini"
+                    return res
                 elif fallback == "openai" and config.OPENAI_API_KEY:
-                    return await self._call_openai(prompt)
+                    res = await self._call_openai(prompt)
+                    self.last_used_provider = "openai"
+                    return res
                 elif fallback == "hermes" and config.HERMES_API_KEY:
-                    return await self._call_hermes(prompt)
+                    res = await self._call_hermes(prompt)
+                    self.last_used_provider = "hermes"
+                    return res
             except Exception as fallback_err:
                 logger.error("Provider cadangan %s juga gagal: %s", fallback, fallback_err)
             
-            # Jika primary anthropic/openai gagal, selalu usahakan fallback ke Gemini jika ada key nya
+            # Jika primary anthropic/openai/hermes gagal, selalu usahakan fallback ke Gemini jika ada key nya
             if config.GEMINI_API_KEY:
                 try:
-                    return await self._call_gemini(prompt)
+                    res = await self._call_gemini(prompt)
+                    self.last_used_provider = "gemini"
+                    return res
                 except Exception as gem_err:
                     logger.error("Fallback darurat ke Gemini gagal: %s", gem_err)
 
@@ -546,14 +570,18 @@ class ChatSummarizer:
                 )
                 summary_content = await self.summarize_chunk(consolidation_prompt, is_intermediate=False)
 
-            if self.provider == "gemini":
+            used_prov = getattr(self, "last_used_provider", self.provider)
+            if used_prov == "gemini":
                 ai_label = "Google Gemini AI (Gratis)"
-            elif self.provider == "openai":
-                ai_label = f"OpenAI GPT ({self.model})"
-            elif self.provider == "anthropic":
-                ai_label = f"Claude ({self.model})"
+            elif used_prov == "openai":
+                ai_label = f"OpenAI GPT ({config.OPENAI_MODEL})"
+            elif used_prov == "anthropic":
+                ai_label = f"Claude ({config.ANTHROPIC_MODEL})"
             else:
-                ai_label = f"Nous-Hermes ({self.model})"
+                ai_label = f"Nous-Hermes ({config.HERMES_MODEL})"
+
+            if used_prov != self.provider:
+                ai_label += f" (Fallback dari {self.provider.upper()})"
 
             summary_content = clean_summary_output(summary_content)
 
@@ -592,6 +620,6 @@ class ChatSummarizer:
                 return (
                     "❌ *Model AI yang dipilih tidak tersedia lagi (404).* \n\n"
                     "Model yang diatur di `.env` mungkin sudah usang/dihentikan oleh Google/OpenAI.\n\n"
-                    "💡 *Solusi:* Gunakan `GEMINI_MODEL=gemini-3.5-flash` atau `gemini-3.6-flash` di file `.env`."
+                    "💡 *Solusi:* Gunakan `GEMINI_MODEL=gemini-3.6-flash` atau `gemini-3.5-flash` di file `.env`."
                 )
             return f"❌ *Terjadi kesalahan saat memproses ringkasan:* {err_str}"

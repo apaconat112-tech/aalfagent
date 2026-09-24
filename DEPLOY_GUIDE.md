@@ -1,6 +1,6 @@
 # 🚀 Panduan Deploy Telegram Bot 24/7 di Railway
 
-Dokumen ini berisi panduan untuk menjalankan bot Telegram secara **24 jam nonstop di Railway**, sehingga bot tetap merespons meskipun laptop dimatikan.
+Dokumen ini berisi panduan untuk menjalankan Bot Online (`bot.py`) dan Bot Rahasia (`userbot_summarizer.py`) secara **24 jam nonstop di Railway / Docker**, menggunakan Master Runner (`run_all.py`).
 
 ---
 
@@ -17,7 +17,7 @@ Di platform Cloud apa pun yang Anda pilih, masukkan variabel dari file `.env` An
 | `GEMINI_API_KEY` | `<GEMINI_API_KEY_ANDA>` jika memakai Gemini |
 | `GEMINI_MODEL` | `gemini-3.6-flash` |
 | `HERMES_API_KEY` | `<OPENROUTER_API_KEY_ANDA>` jika memakai Hermes |
-| `HERMES_MODEL` | `openrouter/auto` |
+| `HERMES_MODEL` | `nex-agi/nex-n2.5-mini:free` |
 | `HERMES_BASE_URL` | `https://openrouter.ai/api/v1` |
 
 ---
@@ -28,15 +28,15 @@ Di platform Cloud apa pun yang Anda pilih, masukkan variabel dari file `.env` An
 2. Buka [Railway](https://railway.com/), pilih **New Project** lalu **Deploy from GitHub Repo**.
 3. Pilih repository project ini. Railway akan mendeteksi `Dockerfile` secara otomatis.
 4. Buka service -> **Variables**, lalu masukkan variabel dari tabel di atas.
-5. Deploy/redeploy service. Log yang benar akan berisi `Application started`.
+5. Deploy/redeploy service. Log akan menampilkan `[BOT ONLINE]` dan `[BOT RAHASIA]` yang berjalan bersamaan.
 
-🎉 **Selesai!** Bot Anda aktif 24/7 di cloud dan laptop boleh dimatikan.
+🎉 **Selesai!** Kedua bot Anda aktif 24/7 di cloud dan laptop boleh dimatikan.
 
 ### Catatan penting Railway
 
-- Service ini adalah worker long-polling dan tidak membutuhkan port HTTP.
+- Service ini mendengarkan long-polling Telegram dan Telethon listener secara simultan via `run_all.py`.
 - `chat_history.db` di filesystem Railway dapat hilang saat redeploy. Tambahkan Railway Volume jika histori database harus persisten.
-- Jangan menjalankan service kedua dengan token bot yang sama, karena Telegram hanya mengizinkan satu polling aktif.
+- Jangan menjalankan service kedua dengan token bot yang sama.
 
 ---
 
@@ -58,7 +58,11 @@ Jika Anda memiliki VPS (seperti DigitalOcean, Biznet, Linode, dll):
 
 ## 📲 Cara Menggunakan Dari HP (Setelah Deploy):
 
-Buka Telegram di HP Anda -> Buka **Pesan Tersimpan (Saved Messages)**:
-- Ketik `/start` -> Memastikan bot merespons.
-- Ketik `/grup` -> Untuk melihat daftar grup Anda.
-- Ketik `/summary` -> Membuat ringkasan pesan yang sudah tersimpan.
+- **Bot Online (DM / Grup)**:
+  - `/start` -> Memulai bot & panduan.
+  - `/summary` -> Ringkaskan pesan grup.
+  - `/satpam` -> Cek / kelola proteksi grup.
+
+- **Bot Rahasia (Saved Messages / Silent)**:
+  - `.sum NamaGrup` -> Ringkas obrolan grup rahasia dari HP.
+  - `.grup` -> Daftar grup yang diikuti akun Telegram Anda.

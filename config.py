@@ -61,8 +61,28 @@ ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022").str
 
 # Konfigurasi Hermes AI (Nous-Hermes via OpenRouter / Ollama / OpenAI-compatible endpoint)
 HERMES_API_KEY = os.getenv("HERMES_API_KEY", "").strip()
-HERMES_MODEL = os.getenv("HERMES_MODEL", "nousresearch/hermes-3-llama-3.1-8b:free").strip()
+HERMES_MODEL = os.getenv("HERMES_MODEL", "nex-agi/nex-n2.5-mini:free").strip()
 HERMES_BASE_URL = os.getenv("HERMES_BASE_URL", "https://openrouter.ai/api/v1").strip()
+
+def reload_config():
+    """BACA ULANG file .env agar perubahan variabel langsung aktif di memori tanpa perlu restart."""
+    load_dotenv(dotenv_path=env_path, override=True)
+    global TELEGRAM_BOT_TOKEN, TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_STRING_SESSION
+    global AI_PROVIDER, GEMINI_API_KEY, GEMINI_MODEL, OPENAI_API_KEY, OPENAI_MODEL
+    global ANTHROPIC_API_KEY, ANTHROPIC_MODEL, HERMES_API_KEY, HERMES_MODEL, HERMES_BASE_URL
+    
+    TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+    GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash").strip()
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+    OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
+    OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").strip()
+    ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022").strip()
+    HERMES_API_KEY = os.getenv("HERMES_API_KEY", "").strip()
+    HERMES_MODEL = os.getenv("HERMES_MODEL", "nex-agi/nex-n2.5-mini:free").strip()
+    HERMES_BASE_URL = os.getenv("HERMES_BASE_URL", "https://openrouter.ai/api/v1").strip()
+    AI_PROVIDER = os.getenv("AI_PROVIDER", "gemini").strip().lower()
 
 # Normalisasi alias provider
 if AI_PROVIDER in ["gpt", "chatgpt", "openai"]:
