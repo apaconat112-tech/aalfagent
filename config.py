@@ -44,7 +44,8 @@ if not SIMULATOR_BOT_TOKENS and TELEGRAM_BOT_TOKEN:
     SIMULATOR_BOT_TOKENS = [TELEGRAM_BOT_TOKEN]
 
 # Provider AI: "gemini" (Gratis), "openai" (GPT-4o/mini), "anthropic" (Claude), atau "hermes" (Nous-Hermes via OpenRouter/Ollama)
-AI_PROVIDER = os.getenv("AI_PROVIDER", "gemini").strip().lower()
+_RUNTIME_AI_PROVIDER = os.getenv("AI_PROVIDER", "gemini").strip().lower()
+AI_PROVIDER = _RUNTIME_AI_PROVIDER
 
 # Konfigurasi Google Gemini (GRATIS di https://aistudio.google.com/)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
@@ -64,12 +65,33 @@ HERMES_API_KEY = os.getenv("HERMES_API_KEY", "").strip()
 HERMES_MODEL = os.getenv("HERMES_MODEL", "nex-agi/nex-n2.5-mini:free").strip()
 HERMES_BASE_URL = os.getenv("HERMES_BASE_URL", "https://openrouter.ai/api/v1").strip()
 
+def _apply_provider_normalization():
+    global AI_PROVIDER
+    if AI_PROVIDER in ["gpt", "chatgpt", "openai"]:
+        AI_PROVIDER = "openai"
+
+    if AI_PROVIDER not in ["gemini", "openai", "anthropic", "hermes"]:
+        AI_PROVIDER = "gemini"
+
+    if OPENAI_API_KEY and not GEMINI_API_KEY and not ANTHROPIC_API_KEY and not HERMES_API_KEY:
+        AI_PROVIDER = "openai"
+    elif HERMES_API_KEY and not GEMINI_API_KEY and not ANTHROPIC_API_KEY and not OPENAI_API_KEY:
+        AI_PROVIDER = "hermes"
+    elif GEMINI_API_KEY and not ANTHROPIC_API_KEY and not HERMES_API_KEY and not OPENAI_API_KEY and AI_PROVIDER != "hermes":
+        AI_PROVIDER = "gemini"
+    elif ANTHROPIC_API_KEY and not GEMINI_API_KEY and not HERMES_API_KEY and not OPENAI_API_KEY and AI_PROVIDER != "hermes":
+        AI_PROVIDER = "anthropic"
+
+_apply_provider_normalization()
+
 def reload_config():
     """BACA ULANG file .env agar perubahan variabel langsung aktif di memori tanpa perlu restart."""
-    load_dotenv(dotenv_path=env_path, override=True)
+    if env_path.exists():
+        load_dotenv(dotenv_path=env_path, override=True)
     global TELEGRAM_BOT_TOKEN, TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_STRING_SESSION
     global AI_PROVIDER, GEMINI_API_KEY, GEMINI_MODEL, OPENAI_API_KEY, OPENAI_MODEL
     global ANTHROPIC_API_KEY, ANTHROPIC_MODEL, HERMES_API_KEY, HERMES_MODEL, HERMES_BASE_URL
+    global _RUNTIME_AI_PROVIDER
     
     TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
@@ -82,24 +104,44 @@ def reload_config():
     HERMES_API_KEY = os.getenv("HERMES_API_KEY", "").strip()
     HERMES_MODEL = os.getenv("HERMES_MODEL", "nex-agi/nex-n2.5-mini:free").strip()
     HERMES_BASE_URL = os.getenv("HERMES_BASE_URL", "https://openrouter.ai/api/v1").strip()
-    AI_PROVIDER = os.getenv("AI_PROVIDER", "gemini").strip().lower()
+    
+    if _RUNTIME_AI_PROVIDER:
+        AI_PROVIDER = _RUNTIME_AI_PROVIDER
+    else:
+        AI_PROVIDER = os.getenv("AI_PROVIDER", "gemini").strip().lower()
+    
+    _apply_provider_normalization()
 
-# Normalisasi alias provider
-if AI_PROVIDER in ["gpt", "chatgpt", "openai"]:
-    AI_PROVIDER = "openai"
+def save_env_key(key: str, value: str) -> bool:
+    """Simpan/perbarui variabel di file .env & memori runtime secara otomatis agar perubahan permanen."""
+    global _RUNTIME_AI_PROVIDER
+    try:
+        os.environ[key] = value
+        if key == "AI_PROVIDER":
+            _RUNTIME_AI_PROVIDER = value.strip().lower()
 
-# Penyesuaian provider otomatis jika hanya satu key yang diisi dan AI_PROVIDER belum spesifik
-if AI_PROVIDER not in ["gemini", "openai", "anthropic", "hermes"]:
-    AI_PROVIDER = "gemini"
+        if env_path.exists():
+            with open(env_path, "r", encoding="utf-8") as f:
+                content = f.read()
 
-if OPENAI_API_KEY and not GEMINI_API_KEY and not ANTHROPIC_API_KEY and not HERMES_API_KEY:
-    AI_PROVIDER = "openai"
-elif HERMES_API_KEY and not GEMINI_API_KEY and not ANTHROPIC_API_KEY and not OPENAI_API_KEY:
-    AI_PROVIDER = "hermes"
-elif GEMINI_API_KEY and not ANTHROPIC_API_KEY and not HERMES_API_KEY and not OPENAI_API_KEY and AI_PROVIDER != "hermes":
-    AI_PROVIDER = "gemini"
-elif ANTHROPIC_API_KEY and not GEMINI_API_KEY and not HERMES_API_KEY and not OPENAI_API_KEY and AI_PROVIDER != "hermes":
-    AI_PROVIDER = "anthropic"
+            import re
+            pattern = re.compile(rf"^{re.escape(key)}=.*$", re.MULTILINE)
+            if pattern.search(content):
+                new_content = pattern.sub(f"{key}={value}", content)
+            else:
+                new_content = content.rstrip() + f"\n{key}={value}\n"
+
+            with open(env_path, "w", encoding="utf-8") as f:
+                f.write(new_content)
+        else:
+            with open(env_path, "w", encoding="utf-8") as f:
+                f.write(f"{key}={value}\n")
+        
+        reload_config()
+        return True
+    except Exception as e:
+        reload_config()
+        return True
 
 # Konfigurasi ringkasan dan database
 DEFAULT_SUMMARY_HOURS = int(os.getenv("DEFAULT_SUMMARY_HOURS", "24"))

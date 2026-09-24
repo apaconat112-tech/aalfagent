@@ -1015,7 +1015,7 @@ async def model_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 )
                 return
 
-            config.AI_PROVIDER = target_prov
+            config.save_env_key("AI_PROVIDER", target_prov)
             global summarizer
             summarizer = ChatSummarizer(provider=target_prov)
 

@@ -430,22 +430,22 @@ async def start_single_userbot(session_str: str, account_index: int = 1, total_a
                 if not config.OPENAI_API_KEY:
                     await client.send_message(dest, f"Waduh {user_name}, `OPENAI_API_KEY` belum diisi di `.env` nih!", parse_mode="Markdown")
                 else:
-                    config.AI_PROVIDER = "openai"
+                    config.save_env_key("AI_PROVIDER", "openai")
                     if param in ["gpt-4o", "gpt-4o-mini"]:
                         config.OPENAI_MODEL = param
                     await client.send_message(dest, f"Siap {user_name}! AI Provider telah diubah ke *OPENAI GPT* (`{config.OPENAI_MODEL}`).", parse_mode="Markdown")
             elif param == "gemini":
-                config.AI_PROVIDER = "gemini"
+                config.save_env_key("AI_PROVIDER", "gemini")
                 await client.send_message(dest, f"Siap {user_name}! AI Provider telah diubah ke *GOOGLE GEMINI* (`{config.GEMINI_MODEL}`).", parse_mode="Markdown")
             elif param in ["hermes", "openrouter", "auto"]:
-                config.AI_PROVIDER = "hermes"
-                config.HERMES_MODEL = "openrouter/auto"
-                await client.send_message(dest, f"Siap {user_name}! AI Provider telah diubah ke *HERMES / OPENROUTER* (`openrouter/auto`).", parse_mode="Markdown")
+                config.save_env_key("AI_PROVIDER", "hermes")
+                config.HERMES_MODEL = "nex-agi/nex-n2.5-mini:free"
+                await client.send_message(dest, f"Siap {user_name}! AI Provider telah diubah ke *HERMES / OPENROUTER* (`{config.HERMES_MODEL}`).", parse_mode="Markdown")
             elif param == "claude":
                 if not config.ANTHROPIC_API_KEY:
                     await client.send_message(dest, f"Waduh {user_name}, `ANTHROPIC_API_KEY` belum diisi di `.env` nih!", parse_mode="Markdown")
                 else:
-                    config.AI_PROVIDER = "anthropic"
+                    config.save_env_key("AI_PROVIDER", "anthropic")
                     await client.send_message(dest, f"Siap {user_name}! AI Provider telah diubah ke *CLAUDE* (`{config.ANTHROPIC_MODEL}`).", parse_mode="Markdown")
             else:
                 # Custom model name for OpenRouter
