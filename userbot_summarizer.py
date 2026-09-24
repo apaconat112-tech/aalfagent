@@ -342,7 +342,23 @@ async def check_all_quotas() -> str:
 
     # 3. OpenAI GPT
     if config.OPENAI_API_KEY:
-        lines.append(f"• *OpenAI GPT*: Aktif (`{config.OPENAI_MODEL}`)")
+        try:
+            async with httpx.AsyncClient(timeout=4.0) as http_client:
+                r = await http_client.post(
+                    f"{config.OPENAI_BASE_URL.rstrip('/')}/chat/completions",
+                    headers={"Authorization": f"Bearer {config.OPENAI_API_KEY}"},
+                    json={"model": config.OPENAI_MODEL, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1}
+                )
+                if r.status_code == 200:
+                    lines.append(f"• *OpenAI GPT*: Aktif (`{config.OPENAI_MODEL}`)")
+                elif "insufficient_quota" in r.text or "credit_balance_exhausted" in r.text or r.status_code == 429:
+                    lines.append(f"• *OpenAI GPT*: Saldo Habis ($0 Credit) ⚠️ (`{config.OPENAI_MODEL}`)")
+                elif r.status_code in [401, 403]:
+                    lines.append(f"• *OpenAI GPT*: API Key Tidak Valid ⚠️")
+                else:
+                    lines.append(f"• *OpenAI GPT*: Aktif (`{config.OPENAI_MODEL}`)")
+        except Exception:
+            lines.append(f"• *OpenAI GPT*: Aktif (`{config.OPENAI_MODEL}`)")
     else:
         lines.append("• *OpenAI GPT*: Key Belum Diisi")
 

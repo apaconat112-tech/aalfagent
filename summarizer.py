@@ -358,6 +358,12 @@ class ChatSummarizer:
                 return res
         except Exception as primary_err:
             logger.warning("Provider utama %s gagal: %s. Mencoba provider cadangan %s...", primary, primary_err, fallback)
+            p_err_str = str(primary_err).lower()
+            if "insufficient_quota" in p_err_str or "credit_balance_exhausted" in p_err_str or "429" in p_err_str:
+                self.last_fallback_reason = f"Saldo/Credit {primary.upper()} $0 (Habis)"
+            else:
+                self.last_fallback_reason = f"{primary.upper()} Error"
+
             try:
                 if fallback == "gemini" and config.GEMINI_API_KEY:
                     res = await self._call_gemini(prompt)
@@ -581,7 +587,9 @@ class ChatSummarizer:
                 ai_label = f"Nous-Hermes ({config.HERMES_MODEL})"
 
             if used_prov != self.provider:
-                ai_label += f" (Fallback dari {self.provider.upper()})"
+                reason = getattr(self, "last_fallback_reason", "")
+                reason_str = f" — {reason}" if reason else ""
+                ai_label += f" (Fallback dari {self.provider.upper()}{reason_str})"
 
             summary_content = clean_summary_output(summary_content)
 
